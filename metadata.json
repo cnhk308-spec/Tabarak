@@ -1,0 +1,6 @@
+{
+  "name": "مرصاد الوثائق",
+  "description": "منصة متخصصة لاستخراج العدد والتاريخ المكتوبين بخط اليد من صور الكتب الرسمية بدقة متناهية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
