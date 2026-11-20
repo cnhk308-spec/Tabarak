@@ -122,29 +122,28 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 1500,
-            maxDim: 1900,
-            format: 'image/png',
+            maxDim: 1150,
+            format: 'image/jpeg',
+            quality: 0.92,
             contrastFilter: false,
           });
-          resolvedMimeType = 'image/png';
+          resolvedMimeType = 'image/jpeg';
           isCropped = true;
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
-          // Send compressed full page + unclipped lossless PNG of TOP_RIGHT_BOX
-          const [compressedFull, headerPng] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1400, 0.9),
+          const [compressedFull, headerJpeg] = await Promise.all([
+            compressImageDataUrl(imageDataUrl, 1000, 0.78),
             cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              minDim: 1500,
-              maxDim: 1900,
-              format: 'image/png',
+              maxDim: 1150,
+              format: 'image/jpeg',
+              quality: 0.92,
               contrastFilter: false,
             }),
           ]);
           payloadDataUrl = compressedFull;
           resolvedMimeType = 'image/jpeg';
-          headerImageBase64 = headerPng;
-          headerMimeType = 'image/png';
+          headerImageBase64 = headerJpeg;
+          headerMimeType = 'image/jpeg';
           headerBoxOrigin = TOP_RIGHT_BOX;
         }
 

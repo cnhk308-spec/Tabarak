@@ -33,7 +33,7 @@ export async function loadImageFile(file: File): Promise<{
   });
 
   const img = await loadHtmlImage(rawDataUrl);
-  const maxDim = 2800;
+  const maxDim = 1800;
   let targetWidth = img.naturalWidth;
   let targetHeight = img.naturalHeight;
 
@@ -118,8 +118,8 @@ export async function enhanceInkContrastDataUrl(dataUrl: string): Promise<string
 
 export const TOP_RIGHT_BOX: BoundingBox = {
   ymin: 0,
-  xmin: 280,
-  ymax: 500,
+  xmin: 340,
+  ymax: 470,
   xmax: 1000,
 };
 
