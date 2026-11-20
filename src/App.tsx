@@ -5,6 +5,12 @@ import { DocumentCanvas } from './components/DocumentCanvas';
 import { ExtractionPanel } from './components/ExtractionPanel';
 import { LedgerTableView } from './components/LedgerTableView';
 import { AccuracyGuideView } from './components/AccuracyGuideView';
+import { GeminiKeyButton } from './components/GeminiKeyButton';
+import {
+  extractDocumentWithGeminiBrowser,
+  getStoredGeminiApiKey,
+  setStoredGeminiApiKey,
+} from './services/geminiExtractor';
 import {
   BoundingBox,
   DigitPreference,
@@ -62,6 +68,7 @@ export default function App() {
   const [enhanceContrast, setEnhanceContrast] = useState<boolean>(false);
   const [showBoxes, setShowBoxes] = useState<boolean>(true);
   const [isGeneratingSample, setIsGeneratingSample] = useState<boolean>(false);
+  const [apiKey, setApiKey] = useState<string>(() => getStoredGeminiApiKey());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -137,10 +144,9 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
         }
 
-        const res = await fetch('/api/extract', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        let result: ExtractionResult;
+        if (apiKey.trim()) {
+          result = await extractDocumentWithGeminiBrowser({
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
             headerImageBase64,
@@ -148,21 +154,36 @@ export default function App() {
             precisionMode: mode,
             isCroppedRegion: isCropped,
             hintText,
-          }),
-        });
+            apiKey,
+          });
+        } else {
+          const res = await fetch('/api/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64: payloadDataUrl,
+              mimeType: resolvedMimeType,
+              headerImageBase64,
+              headerMimeType,
+              precisionMode: mode,
+              isCroppedRegion: isCropped,
+              hintText,
+            }),
+          });
 
-        const contentType = res.headers.get('content-type') || '';
-        const data = contentType.includes('application/json')
-          ? await res.json()
-          : null;
-        if (!res.ok || !data || data.error) {
-          throw new Error(
-            data?.error ||
-              'تعذر الاتصال بخدمة التحليل على الخادم (تأكد من تشغيل خادم التطبيق).'
-          );
+          const contentType = res.headers.get('content-type') || '';
+          const data = contentType.includes('application/json')
+            ? await res.json()
+            : null;
+          if (!res.ok || !data || data.error) {
+            throw new Error(
+              data?.error ||
+                'تعذر الاتصال بخدمة التحليل على الخادم. اضغط على زر المفتاح في أسفل الشاشة لإدخال مفتاح Gemini API والعمل مباشرة.'
+            );
+          }
+
+          result = data.result as ExtractionResult;
         }
-
-        const result = data.result as ExtractionResult;
 
         const boxOrigin =
           isCropped && originBox
@@ -222,7 +243,7 @@ export default function App() {
         );
       }
     },
-    [digitPreference, hintText, scanRegion]
+    [apiKey, digitPreference, hintText, scanRegion]
   );
 
   const handleFilesSelected = useCallback(
@@ -575,6 +596,14 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      <GeminiKeyButton
+        apiKey={apiKey}
+        onSaveApiKey={(nextKey) => {
+          setStoredGeminiApiKey(nextKey);
+          setApiKey(nextKey);
+        }}
+      />
     </div>
   );
 }
