@@ -1,51 +1,121 @@
 import 'dotenv/config';
 import express from 'express';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, MediaResolution, ThinkingLevel, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT) || 3000;
+type PrecisionMode = 'standard' | 'ultra';
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+interface ExtractRequestBody {
+  imageBase64?: string;
+  mimeType?: string;
+  headerImageBase64?: string;
+  headerMimeType?: string;
+  precisionMode?: PrecisionMode;
+  isCroppedRegion?: boolean;
+  hintText?: string;
+}
 
-const extractionResponseSchema = {
+const fastExtractionSchema = {
   type: Type.OBJECT,
   properties: {
-    issueNumberRaw: {
+    rightmostDigitCheck: {
       type: Type.STRING,
       description:
-        'العدد كما هو مكتوب بالضبط في الكتاب (مع الحروف والشرطات المائلة إن وجدت، والأرقام كما كتبت). إذا لم يوجد اكتب سلسلة فارغة.',
+        'افحص الفراغ الملاصق تماماً ليسار عبارة (العدد :) أو الشرطة (/) على جهة اليمين: ما هو الرقم أو الشكل المكتوب هناك مباشرةً قبل النقطتين (مثل ٦ أو ٨ أو ٤ أو ١)؟ لا تعتبره علامة ترقيم.',
     },
-    issueNumberNormalized: {
+    leftToRightDigits: {
       type: Type.STRING,
       description:
-        'العدد بعد تحويل الأرقام الهندية/العربية (٠١٢٣٤٥٦٧٨٩) إلى أرقام قياسية (0123456789) مع الحفاظ على أي حروف أو شرطات مائلة مثل م/4/1250.',
+        'اقرأ كل خانة مستقلة في العدد من أقصى اليسار إلى أقصى اليمين مفصولة بمسافة (مثال توضيحي: ١ ٢ ٨ ٥) متضمنة الخانة المرصودة في rightmostDigitCheck.',
     },
-    issueNumberConfidence: {
+    issueNumber: {
       type: Type.STRING,
-      description: 'مستوى الثقة في قراءة العدد: high أو medium أو low.',
+      description:
+        'العدد النهائي كاملاً كما هو مكتوب بخط اليد مع أي حروف أو شرطات مائلة مطابقاً لجميع الخانات في leftToRightDigits.',
     },
     alternativeIssueNumber: {
       type: Type.STRING,
+      description: 'قراءة بديلة محتملة في حال وجود رقم غير واضح، وإلا سلسلة فارغة.',
+    },
+    date: {
+      type: Type.STRING,
+      description: 'التاريخ كما هو مكتوب بالضبط بخط اليد.',
+    },
+    title: {
+      type: Type.STRING,
       description:
-        'قراءة بديلة محتملة في حال وجود رقم غير واضح أو متداخل مع الختم، وإلا سلسلة فارغة.',
+        'العنوان المركزي مثل (أمر جامعي) أو (أمر إداري) عند غياب إلى/ و م/، وإلا سلسلة فارغة.',
+    },
+    recipient: {
+      type: Type.STRING,
+      description: 'النص بعد (إلى /) إن وجد، وإلا سلسلة فارغة.',
+    },
+    subject: {
+      type: Type.STRING,
+      description: 'النص بعد (م /) إن وجد، وإلا سلسلة فارغة.',
+    },
+    bodyContent: {
+      type: Type.STRING,
+      description: 'مضمون الكتاب كاملاً بدقة، وإلا سلسلة فارغة.',
+    },
+    confidence: {
+      type: Type.STRING,
+      description: 'high أو medium أو low',
+    },
+    calendar: {
+      type: Type.STRING,
+      description: 'gregorian أو hijri أو unknown',
+    },
+  },
+  required: [
+    'rightmostDigitCheck',
+    'leftToRightDigits',
+    'issueNumber',
+    'date',
+    'title',
+    'recipient',
+    'subject',
+    'bodyContent',
+    'confidence',
+    'calendar',
+  ],
+};
+
+const ultraExtractionSchema = {
+  type: Type.OBJECT,
+  properties: {
+    rightmostDigitCheck: {
+      type: Type.STRING,
+      description:
+        'افحص الحبر اليدوي الملاصق تماماً ليسار عبارة (العدد :) أو الشرطة (/) على جهة اليمين: ما الرقم المكتوب هناك مباشرةً (مثل ٦ أو ٨ أو ٤ أو ١)؟',
+    },
+    leftToRightDigits: {
+      type: Type.STRING,
+      description: 'جميع خانات العدد مفصولة بمسافة من أقصى اليسار إلى أقصى اليمين.',
+    },
+    issueNumberRaw: {
+      type: Type.STRING,
+      description: 'العدد كما هو مكتوب بالضبط في الكتاب مطابقاً لـ leftToRightDigits.',
+    },
+    issueNumberNormalized: {
+      type: Type.STRING,
+      description: 'العدد بأرقام إنجليزية (0123456789) مع الحفاظ على الحروف والشرطات المائلة.',
+    },
+    issueNumberConfidence: {
+      type: Type.STRING,
+      description: 'high أو medium أو low.',
+    },
+    alternativeIssueNumber: {
+      type: Type.STRING,
+      description: 'قراءة بديلة محتملة في حال الشك في خانة، وإلا سلسلة فارغة.',
     },
     issueNumberBox: {
       type: Type.OBJECT,
-      description:
-        'إحداثيات مربع الإحاطة لقيمة العدد المكتوبة (نطاق من 0 إلى 1000 نسبةً لأبعاد الصورة المرسلة).',
+      description: 'إحداثيات مربع الإحاطة لقيمة العدد في الصورة الأولى (0 إلى 1000).',
       properties: {
         ymin: { type: Type.INTEGER },
         xmin: { type: Type.INTEGER },
@@ -56,30 +126,27 @@ const extractionResponseSchema = {
     },
     dateRaw: {
       type: Type.STRING,
-      description:
-        'التاريخ كما هو مكتوب بالضبط بخط اليد في الكتاب (مثل ١٤ / ١١ / ٢٠٢٥ أو 2025/11/14).',
+      description: 'التاريخ كما هو مكتوب بالضبط بخط اليد.',
     },
     dateNormalized: {
       type: Type.STRING,
-      description:
-        'التاريخ بصيغة قياسية موحدة YYYY/MM/DD بأرقام إنجليزية (مثال: 2025/11/14). إذا تعذر تحديد اليوم أو الشهر اكتب ما أمكن بأدق شكل.',
+      description: 'التاريخ بصيغة YYYY/MM/DD بأرقام إنجليزية.',
     },
     dateConfidence: {
       type: Type.STRING,
-      description: 'مستوى الثقة في قراءة التاريخ: high أو medium أو low.',
+      description: 'high أو medium أو low.',
     },
     alternativeDate: {
       type: Type.STRING,
-      description: 'قراءة بديلة محتملة للتاريخ إذا كان أحد الأرقام محتملاً لأكثر من قراءة، وإلا سلسلة فارغة.',
+      description: 'قراءة بديلة للتاريخ، وإلا سلسلة فارغة.',
     },
     calendarType: {
       type: Type.STRING,
-      description: 'نوع التقويم: gregorian (ميلادي) أو hijri (هجري) أو unknown.',
+      description: 'gregorian أو hijri أو unknown.',
     },
     dateBox: {
       type: Type.OBJECT,
-      description:
-        'إحداثيات مربع الإحاطة لقيمة التاريخ المكتوبة (نطاق من 0 إلى 1000 نسبةً لأبعاد الصورة المرسلة).',
+      description: 'إحداثيات مربع الإحاطة لقيمة التاريخ في الصورة الأولى (0 إلى 1000).',
       properties: {
         ymin: { type: Type.INTEGER },
         xmin: { type: Type.INTEGER },
@@ -90,36 +157,36 @@ const extractionResponseSchema = {
     },
     issuingEntity: {
       type: Type.STRING,
-      description: 'اسم الوزارة أو الدائرة أو الجهة المصدرة للكتاب إن ظهر في الترويسة، وإلا سلسلة فارغة.',
+      description: 'الجهة المصدرة للكتاب إن ظهرت، وإلا سلسلة فارغة.',
     },
     title: {
       type: Type.STRING,
-      description:
-        'العنوان الرئيسي في منتصف الورقة مثل (أمر جامعي) أو (أمر إداري) أو (إعمام)، خصوصاً عند عدم وجود (إلى/) و(م/)، وإلا سلسلة فارغة.',
+      description: 'العنوان المركزي مثل (أمر جامعي) عند غياب إلى/ و م/، وإلا سلسلة فارغة.',
     },
     recipient: {
       type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (إلى /) إن وجد في منتصف الكتاب، وإلا سلسلة فارغة.',
+      description: 'النص بعد (إلى /) إن وجد، وإلا سلسلة فارغة.',
     },
     subject: {
       type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (م /) إن وجد في منتصف الكتاب، وإلا سلسلة فارغة.',
+      description: 'النص بعد (م /) إن وجد، وإلا سلسلة فارغة.',
     },
     bodyContent: {
       type: Type.STRING,
-      description: 'مضمون الكتاب كاملاً (النص الأساسي للرسالة الرسمية) مكتوباً بدقة.',
+      description: 'مضمون الكتاب كاملاً بدقة.',
     },
     handwritingNotes: {
       type: Type.STRING,
-      description:
-        'ملاحظة موجزة بالعربية حول وضوح خط اليد أو تداخل الختم أو سبب الشك في رقم معين إن وجد.',
+      description: 'ملاحظة موجزة حول وضوح خط اليد إن وجد.',
     },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
-      description: 'هل العدد والتاريخ مكتوبان بخط اليد أم مطبوعان.',
+      description: 'هل العدد والتاريخ مكتوبان بخط اليد.',
     },
   },
   required: [
+    'rightmostDigitCheck',
+    'leftToRightDigits',
     'issueNumberRaw',
     'issueNumberNormalized',
     'issueNumberConfidence',
@@ -131,54 +198,27 @@ const extractionResponseSchema = {
   ],
 };
 
-const fastExtractionSchema = {
-  type: Type.OBJECT,
-  properties: {
-    issueNumber: {
-      type: Type.STRING,
-      description: 'العدد كما هو مكتوب بالضبط بخط اليد مع أي حروف أو شرطات مائلة.',
-    },
-    date: {
-      type: Type.STRING,
-      description: 'التاريخ كما هو مكتوب بالضبط بخط اليد.',
-    },
-    title: {
-      type: Type.STRING,
-      description:
-        'العنوان الرئيسي للكتاب مثل (أمر جامعي) أو (أمر إداري) في منتصف الورقة، خاصةً إذا لم يوجد (إلى/) و(م/)، وإلا سلسلة فارغة.',
-    },
-    recipient: {
-      type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (إلى /) في منتصف الكتاب إن وجد، وإلا سلسلة فارغة.',
-    },
-    subject: {
-      type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (م /) في منتصف الكتاب إن وجد، وإلا سلسلة فارغة.',
-    },
-    bodyContent: {
-      type: Type.STRING,
-      description: 'مضمون الكتاب كاملاً (النص الأساسي في جسم الكتاب) منسوخاً بدقة ووضوح، وإلا سلسلة فارغة.',
-    },
-    confidence: {
-      type: Type.STRING,
-      description: 'high أو medium أو low',
-    },
-    calendar: {
-      type: Type.STRING,
-      description: 'gregorian أو hijri أو unknown',
-    },
-  },
-  required: ['issueNumber', 'date', 'title', 'recipient', 'subject', 'bodyContent', 'confidence', 'calendar'],
-};
+const HANDWRITING_RULES = `قواعد صارمة لقراءة الأرقام الهندية/العربية المكتوبة بخط اليد:
+- ركّز على الحبر اليدوي بجانب كلمة "العدد :" وكلمة "التاريخ :".
+- خطأ شائع يجب منعه تماماً: كثير من الأرقام الرباعية تُكتب فيها الخانة الرابعة (الآحاد على اليمين، مثل ٦ أو ٨ أو ٤ أو ١) قريبة من النقطتين ":" أو فوق الخط المنقط، فتُسقط خطأً (مثلاً يُقرأ رقم من ٤ خانات كأنه ٣ خانات فقط!). افحص المنطقة بين النقطتين ":" والخانة التي تليها بعناية فائقة ولا تسقط الخانة اليمنى أبداً.
+- لا تدمج رقمين متقاربين (مثل ٨ و ٦ فتقرأهما ٢، أو ٧ و ٨).
+- تمييز الأشكال اليدوية بدقة:
+  * (٠): نقطة أو دائرة صغيرة جداً، و(٥): دائرة مغلقة أو شكل قلب واضح.
+  * (٢): قوسه العلوي متجه لليمين، أما (٦): قوسه/زاويته العليا متجهة لليسار ثم ينزل عمودياً للأسفل.
+  * (٣): له أسنان متموجة في الأعلى، أما (٢): سن واحد منحني.
+  * (٧): مفتوح للأعلى (∨)، أما (٨): مفتوح للأسفل (∧).
+  * (١): خط عمودي مفرد، و(٩): حلقة مغلقة في الأعلى مع ذيل للأسفل.
+- اكتب أولاً rightmostDigitCheck ثم leftToRightDigits ثم اكتب العدد النهائي مطابقاً لهما بالكامل.`;
 
-const FAST_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرشفة الكتب الرسمية العربية.
-مهمتك:
-1. استخرج (العدد) و(التاريخ) المكتوبين بخط اليد بدقة 100% (ميّز بدقة بين ٢ و٣، و٦ و٢، و٧ و٨، ولا تسقط أي خانة مثل ٥٠٨٦). إذا أُرفقت صورة ثانية مكبّرة للترويسة فاعتمد عليها لقراءة العدد والتاريخ.
-2. في منتصف الورقة:
-   - إذا وُجدت (إلى / ...) فضَعها في recipient.
-   - إذا وُجدت (م / ...) فضَعها في subject.
-   - إذا لم يوجد (إلى/) و(م/) أو وُجد عنوان مركزي بارز مثل (أمر جامعي) أو (أمر إداري) أو (إعمام) فضَعه في title (العنوان).
-3. استخرج مضمون الكتاب كاملاً (نص المتن الرئيسي للكتاب) في bodyContent بدقة دون اختصار أو تحريف.`;
+const FAST_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة الكتب الرسمية العربية وخط اليد بدقة عالية.
+- إذا وُجدت صورتان: الصورة الأولى هي تقريب مكبّر للترويسة العليا اليمنى (PNG عالي الوضوح)، اعتمد عليها أساساً لقراءة (العدد) و(التاريخ) بخط اليد؛ والصورة الثانية هي الكتاب كاملاً لاستخراج العنوان و(إلى/) و(م/) ومضمون الكتاب.
+${HANDWRITING_RULES}
+- استخرج recipient بعد (إلى/) وsubject بعد (م/)، وإذا لم يوجدا ضَع العنوان مثل (أمر جامعي) في title، وانسخ مضمون الكتاب كاملاً في bodyContent.`;
+
+const ULTRA_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرشفة الكتب الرسمية العربية وخط اليد بدقة فائقة.
+- عند وجود صورتين: الصورة الأولى هي الترويسة المكبّرة لقراءة (العدد) و(التاريخ) ومربعيهما (0..1000 نسبة للصورة الأولى)، والصورة الثانية هي الكتاب كاملاً لاستخراج الجهة المصدرة والعنوان و(إلى/) و(م/) ومضمون الكتاب.
+${HANDWRITING_RULES}
+- إذا كان هناك غموض أو تداخل مع الختم خفّض مستوى الثقة واذكر قراءة بديلة وملاحظة واضحة.`;
 
 function toWesternDigits(str: string): string {
   const eastern = '٠١٢٣٤٥٦٧٨٩';
@@ -192,16 +232,13 @@ function normalizeDateString(rawDate: string): string {
   const western = toWesternDigits(rawDate).replace(/\s+/g, '');
   const parts = western.split(/[\/\-.]+/).filter(Boolean);
   if (parts.length === 3) {
-    let [a, b, c] = parts;
-    // If DD/MM/YYYY
+    const [a, b, c] = parts;
     if (c.length === 4 && Number(a) <= 31) {
       return `${c}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
     }
-    // If YYYY/MM/DD
     if (a.length === 4) {
       return `${a}/${b.padStart(2, '0')}/${c.padStart(2, '0')}`;
     }
-    // If DD/MM/YY
     if (c.length === 2 && Number(a) <= 31) {
       const fullYear = Number(c) >= 40 ? `14${c}` : `20${c}`;
       return `${fullYear}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
@@ -210,163 +247,211 @@ function normalizeDateString(rawDate: string): string {
   return western;
 }
 
-const SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرشفة الكتب والمخاطبات الرسمية العربية (العراقية والعربية)، ومتخصص بشكل دقيق في قراءة الأرقام والتواريخ المكتوبة بخط اليد (سواء بالأرقام الهندية الشرقية ٠١٢٣٤٥٦٧٨٩ أو الأرقام العربية الغربية 0123456789).
-
-اتبع القواعد الصارمة التالية عند فحص الصورة:
-1. افحص ترويسة الكتاب العليا (عادةً أعلى اليمين أو أعلى اليسار، وأحياناً في ختم الصادرة/الواردة) للعثور على حقل (العدد / رقم الكتاب / الرقم) وحقل (التاريخ / الموافق).
-2. ركز بدقة متناهية على الحبر اليدوي (أزرق، أسود، أو أحمر) المكتوب بجانب أو أسفل كلمة "العدد" وكلمة "التاريخ".
-3. انتبه للتشابه الشائع في خط اليد العربي للأرقام:
-   - ميّز بدقة بين (٢) و(٣)، وبين (٠ نقطة) و(٥ دائرة)، وبين (٧) و(٨)، وبين (٦) و(٢)، وبين (١) والشرطة المائلة (/).
-   - لا تدمج رقمين متجاورين ولا تسقط الخانة الأخيرة أو الأولى أبداً.
-   - ميّز بين الفواصل والشرطات المائلة (/) والخطوط الأفقية (-) في رقم العدد (مثل: م/٤/١٢٠٥ أو ق.ع/٢٣١ أو 450/2/1). لا تحذف البادئات الحرفية أو الأرقام الفرعية.
-4. في التاريخ:
-   - اقرأ التاريخ كما كُتب بالضبط في dateRaw.
-   - إذا كان التاريخ بصيغة يوم/شهر/سنة (مثل 14/11/2025 أو ١٤-١١-٢٥) فحوّله في dateNormalized إلى صيغة YYYY/MM/DD (مثل 2025/11/14).
-   - حدد إن كان التقويم ميلادياً (gregorian) أم هجرياً (hijri) بناءً على السنة (مثلاً 1445–1448 هجري، 2020–2030 ميلادي) أو لفظة "هـ" / "م".
-5. حدد مربعات الإحاطة (issueNumberBox و dateBox) بدقة على منطقة القيمة المكتوبة نفسها في الصورة الأولى بإحداثيات من 0 إلى 1000.
-6. استخرج نص (إلى/) في recipient ونص (م/) في subject، وعند عدم وجودهما (أو وجود عنوان بارز وسط الصفحة مثل أمر جامعي أو أمر إداري) ضعه في title، واكتب مضمون الكتاب كاملاً في bodyContent بدقة.
-7. لا تخمّن أبداً رقماً غير موجود. إذا كان هناك غموض أو طمس أو تداخل مع الختم، خفّض مستوى الثقة إلى medium أو low واذكر القراءة البديلة والملاحظة بوضوح.`;
-
-async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
-    } catch (err: any) {
+    } catch (err: unknown) {
       lastError = err;
-      const status = err?.status || err?.code;
+      const errObj = err as { status?: number; code?: number };
+      const status = errObj?.status || errObj?.code;
       const isTransient = status === 429 || status === 503 || status === 500;
       if (!isTransient || attempt === maxRetries) {
         throw err;
       }
-      const delayMs = 800 * Math.pow(2, attempt);
+      const delayMs = 600 * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   throw lastError;
 }
 
+function getAiClient(): GoogleGenAI {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('لم يتم تهيئة مفتاح Gemini على الخادم.');
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+const headerLocationSchema = {
+  type: Type.OBJECT,
+  properties: {
+    found: {
+      type: Type.BOOLEAN,
+      description: 'هل تم العثور على سطر العدد أو التاريخ في الصورة.',
+    },
+    ymin: { type: Type.INTEGER, description: 'الحد العلوي للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
+    xmin: { type: Type.INTEGER, description: 'الحد الأيسر للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
+    ymax: { type: Type.INTEGER, description: 'الحد السفلي للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
+    xmax: { type: Type.INTEGER, description: 'الحد الأيمن شامل عبارة العدد: والتاريخ: (0..1000).' },
+  },
+  required: ['found', 'ymin', 'xmin', 'ymax', 'xmax'],
+};
+
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '30mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true });
+  app.post('/api/locate-header', async (req, res) => {
+    try {
+      const body = (req.body || {}) as { imageBase64?: string; mimeType?: string };
+      if (!body.imageBase64 || typeof body.imageBase64 !== 'string') {
+        res.json({ box: null });
+        return;
+      }
+      const ai = getAiClient();
+      const cleanBase64 = body.imageBase64.includes(',')
+        ? body.imageBase64.split(',')[1]
+        : body.imageBase64;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: body.mimeType || 'image/jpeg',
+                data: cleanBase64,
+              },
+            },
+            {
+              text: 'حدد الإحداثيات (0 إلى 1000) لمربع واحد يضم كلمتي (العدد) و(التاريخ) على اليمين وكامل القيم المكتوبة بخط اليد على يسارهما أو أسفلهما دون قص أي رقم.',
+            },
+          ],
+        },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: headerLocationSchema,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
+        },
+      });
+
+      const text = (response.text ?? '').trim();
+      if (!text) {
+        res.json({ box: null });
+        return;
+      }
+      const parsed = JSON.parse(text);
+      if (!parsed.found) {
+        res.json({ box: null });
+        return;
+      }
+      res.json({
+        box: {
+          ymin: parsed.ymin,
+          xmin: parsed.xmin,
+          ymax: parsed.ymax,
+          xmax: parsed.xmax,
+        },
+      });
+    } catch {
+      res.json({ box: null });
+    }
   });
 
   app.post('/api/extract', async (req, res) => {
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        res.status(500).json({
-          error: 'مفتاح GEMINI_API_KEY غير متوفر في إعدادات الخادم (Secrets).',
-        });
+      const body = (req.body || {}) as ExtractRequestBody;
+      if (!body.imageBase64 || typeof body.imageBase64 !== 'string') {
+        res.status(400).json({ error: 'بيانات الصورة غير صالحة أو مفقودة.' });
         return;
       }
 
-      const {
-        imageBase64,
-        mimeType,
-        headerImageBase64,
-        headerMimeType,
-        precisionMode,
-        isCroppedRegion,
-        hintText,
-      } = req.body as {
-        imageBase64?: string;
-        mimeType?: string;
-        headerImageBase64?: string;
-        headerMimeType?: string;
-        precisionMode?: 'standard' | 'ultra';
-        isCroppedRegion?: boolean;
-        hintText?: string;
-      };
+      const ai = getAiClient();
 
-      if (!imageBase64) {
-        res.status(400).json({ error: 'لم يتم إرسال صورة صالحة للتحليل.' });
-        return;
-      }
+      const cleanFullBase64 = body.imageBase64.includes(',')
+        ? body.imageBase64.split(',')[1]
+        : body.imageBase64;
+      const fullMimeType = body.mimeType || 'image/jpeg';
 
-      const cleanBase64 = imageBase64.includes(',')
-        ? imageBase64.split(',')[1]
-        : imageBase64;
-      const resolvedMimeType = mimeType || 'image/jpeg';
+      const cleanHeaderBase64 =
+        body.headerImageBase64 && typeof body.headerImageBase64 === 'string'
+          ? body.headerImageBase64.includes(',')
+            ? body.headerImageBase64.split(',')[1]
+            : body.headerImageBase64
+          : null;
+      const headerMimeType = body.headerMimeType || 'image/jpeg';
 
-      const cleanHeaderBase64 = headerImageBase64
-        ? headerImageBase64.includes(',')
-          ? headerImageBase64.split(',')[1]
-          : headerImageBase64
-        : null;
+      const isUltra = body.precisionMode === 'ultra';
+      const hintLine =
+        body.hintText && body.hintText.trim().length > 0
+          ? ` تلميح: ${body.hintText.trim()}`
+          : '';
 
-      const isUltra = precisionMode === 'ultra';
-      const primaryModel = 'gemini-4-hydrogen';
-      const primaryThinking = isUltra ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
-
-      const userPromptParts = [
-        cleanHeaderBase64
-          ? 'الصورة الأولى هي الكتاب الرسمي كاملاً لاستخراج (العنوان مثل أمر جامعي عند عدم وجود إلى/م، و إلى/، و م/، ومضمون الكتاب كاملاً)، والصورة الثانية هي تقريب مكبّر للجزء العلوي الأيمن لقراءة العدد والتاريخ المكتوبين بخط اليد بدقة تامة.'
-          : isCroppedRegion
-          ? 'اقرأ العدد والتاريخ المكتوبين بخط اليد من هذه الترويسة المقصوصة.'
-          : 'استخرج العدد والتاريخ المكتوبين بخط اليد والعنوان أو إلى/م ومضمون الكتاب كاملاً.',
-      ];
-
-      if (hintText && hintText.trim().length > 0) {
-        userPromptParts.push(`تلميح: ${hintText.trim()}`);
-      }
-
-      const contentParts: any[] = [
-        {
-          inlineData: {
-            mimeType: resolvedMimeType,
-            data: cleanBase64,
-          },
-        },
-      ];
+      const contentParts: Array<
+        { inlineData: { mimeType: string; data: string } } | { text: string }
+      > = [];
 
       if (cleanHeaderBase64) {
         contentParts.push({
           inlineData: {
-            mimeType: headerMimeType || 'image/jpeg',
+            mimeType: headerMimeType,
             data: cleanHeaderBase64,
           },
         });
       }
 
       contentParts.push({
-        text: userPromptParts.join(' '),
+        inlineData: {
+          mimeType: fullMimeType,
+          data: cleanFullBase64,
+        },
       });
 
-      const callModel = (model: string, thinkingLevel: ThinkingLevel) =>
+      contentParts.push({
+        text: cleanHeaderBase64
+          ? `اقرأ العدد والتاريخ بخط اليد بدقة تامة من الصورة الأولى (الترويسة المكبّرة) مع التحقق أولاً من الخانة اليمنى الملاصقة لعبارة العدد والنقطتين ثم قراءة جميع الخانات من اليسار لليمين، واستخرج من الصورة الثانية العنوان أو إلى/م ومضمون الكتاب.${hintLine}`
+          : body.isCroppedRegion
+          ? `اقرأ العدد والتاريخ المكتوبين بخط اليد من هذه الترويسة مع التحقق من الخانة اليمنى الملاصقة لعبارة العدد والنقطتين.${hintLine}`
+          : `استخرج العدد والتاريخ بخط اليد بدقة تامة والعنوان أو إلى/م ومضمون الكتاب كاملاً.${hintLine}`,
+      });
+
+      const callModel = (
+        model: string,
+        thinkingLevel: ThinkingLevel,
+        useHighMediaRes: boolean
+      ) =>
         ai.models.generateContent({
           model,
-          contents: {
-            parts: contentParts,
-          },
+          contents: { parts: contentParts },
           config: {
-            systemInstruction: isUltra ? SYSTEM_INSTRUCTION : FAST_SYSTEM_INSTRUCTION,
+            systemInstruction: isUltra ? ULTRA_SYSTEM_INSTRUCTION : FAST_SYSTEM_INSTRUCTION,
             responseMimeType: 'application/json',
-            responseSchema: isUltra ? extractionResponseSchema : fastExtractionSchema,
-            thinkingConfig: {
-              thinkingLevel,
-            },
+            responseSchema: isUltra ? ultraExtractionSchema : fastExtractionSchema,
+            thinkingConfig: { thinkingLevel },
+            ...(useHighMediaRes
+              ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH }
+              : {}),
           },
         });
 
       let response;
+      const targetThinking = isUltra ? ThinkingLevel.XHIGH : ThinkingLevel.HIGH;
       try {
-        response = await callModel(primaryModel, primaryThinking);
-      } catch (primaryErr: any) {
-        const status = primaryErr?.status || primaryErr?.code;
-        if (status === 429 || status === 503) {
-          response = await callGeminiWithRetry(
-            () =>
-              callModel(
-                'gemini-3.1-flash-lite',
-                isUltra ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM
-              ),
+        response = await callModel('gemini-4-hydrogen', targetThinking, true);
+      } catch (err: unknown) {
+        const errObj = err as { status?: number; code?: number; message?: string };
+        const status = errObj?.status || errObj?.code;
+        if (status === 400) {
+          console.warn('Retrying without mediaResolution due to 400:', errObj?.message);
+          response = await callModel('gemini-4-hydrogen', ThinkingLevel.HIGH, false);
+        } else if (status === 429 || status === 503) {
+          response = await callWithRetry(
+            () => callModel('gemini-3.1-flash-lite', ThinkingLevel.HIGH, true),
             1
           );
         } else {
-          throw primaryErr;
+          throw err;
         }
       }
 
@@ -379,61 +464,58 @@ async function startServer() {
       }
 
       const rawParsed = JSON.parse(rawText);
-      const parsed = isUltra
-        ? rawParsed
-        : {
-            issueNumberRaw: rawParsed.issueNumber || '',
-            issueNumberNormalized: toWesternDigits(rawParsed.issueNumber || ''),
-            issueNumberConfidence: rawParsed.confidence || 'medium',
-            dateRaw: rawParsed.date || '',
-            dateNormalized: normalizeDateString(rawParsed.date || ''),
-            dateConfidence: rawParsed.confidence || 'medium',
-            calendarType: rawParsed.calendar || 'unknown',
-            title: rawParsed.title || '',
-            recipient: rawParsed.recipient || '',
-            subject: rawParsed.subject || '',
-            bodyContent: rawParsed.bodyContent || '',
-          };
-
-      res.json({ result: parsed });
-    } catch (error: any) {
-      console.error('Extraction API Error:', error);
-      const status = typeof error?.status === 'number' ? error.status : 500;
-      let message = 'حدث خطأ أثناء تحليل صورة الكتاب الرسمي.';
-
-      if (status === 400 || status === 403) {
-        message =
-          'تعذر المصادقة مع خدمة التحليل. يرجى التحقق من مفتاح GEMINI_API_KEY في لوحة Secrets.';
-      } else if (status === 429) {
-        message =
-          'تم تجاوز حد الطلبات المؤقت. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.';
-      } else if (error?.message) {
-        message = `تعذر إكمال التحليل: ${error.message}`;
+      if (isUltra) {
+        res.json({ result: rawParsed });
+        return;
       }
 
-      res.status(status >= 400 && status < 600 ? status : 500).json({ error: message });
+      res.json({
+        result: {
+          issueNumberRaw: rawParsed.issueNumber || '',
+          issueNumberNormalized: toWesternDigits(rawParsed.issueNumber || ''),
+          issueNumberConfidence: rawParsed.confidence || 'medium',
+          alternativeIssueNumber: rawParsed.alternativeIssueNumber || '',
+          dateRaw: rawParsed.date || '',
+          dateNormalized: normalizeDateString(rawParsed.date || ''),
+          dateConfidence: rawParsed.confidence || 'medium',
+          calendarType: rawParsed.calendar || 'unknown',
+          title: rawParsed.title || '',
+          recipient: rawParsed.recipient || '',
+          subject: rawParsed.subject || '',
+          bodyContent: rawParsed.bodyContent || '',
+        },
+      });
+    } catch (err: unknown) {
+      const errObj = err as { status?: number; code?: number; message?: string };
+      const status = errObj?.status || errObj?.code;
+      if (status === 429 || status === 503) {
+        res.status(429).json({
+          error: 'تم تجاوز حد الطلبات المؤقت. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.',
+        });
+        return;
+      }
+      res.status(500).json({
+        error: errObj?.message || 'حدث خطأ أثناء تحليل صورة الكتاب.',
+      });
     }
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      const indexPath = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-      } else {
-        res.status(404).send('Build output not found.');
-      }
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
+  const PORT = Number(process.env.PORT) || 3000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server listening on http://0.0.0.0:${PORT}`);
   });

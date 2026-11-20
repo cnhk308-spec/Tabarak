@@ -150,6 +150,7 @@ export async function cropRegionDataUrl(
   box: BoundingBox,
   paddingNormalized = 25,
   options?: {
+    minDim?: number;
     maxDim?: number;
     format?: 'image/png' | 'image/jpeg';
     quality?: number;
@@ -169,8 +170,13 @@ export async function cropRegionDataUrl(
 
   let targetW = sw;
   let targetH = sh;
+  const minDim = options?.minDim;
   const maxDim = options?.maxDim;
-  if (maxDim && (targetW > maxDim || targetH > maxDim)) {
+  if (minDim && Math.max(targetW, targetH) < minDim) {
+    const scale = minDim / Math.max(targetW, targetH);
+    targetW = Math.round(targetW * scale);
+    targetH = Math.round(targetH * scale);
+  } else if (maxDim && (targetW > maxDim || targetH > maxDim)) {
     const scale = maxDim / Math.max(targetW, targetH);
     targetW = Math.round(targetW * scale);
     targetH = Math.round(targetH * scale);
@@ -182,8 +188,10 @@ export async function cropRegionDataUrl(
   const ctx = canvas.getContext('2d');
   if (!ctx) return dataUrl;
 
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   if (options?.contrastFilter) {
-    ctx.filter = 'contrast(1.22) brightness(1.03)';
+    ctx.filter = 'contrast(1.24) saturate(1.08)';
   }
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
   const format = options?.format ?? 'image/png';

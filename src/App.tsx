@@ -97,39 +97,93 @@ export default function App() {
         let payloadDataUrl = imageDataUrl;
         let resolvedMimeType = mimeType;
         let headerImageBase64: string | undefined;
+        let headerMimeType: string | undefined;
         let isCropped = Boolean(options?.isCroppedRegion);
         let originBox = options?.cropOriginBox;
+        let headerBoxOrigin: BoundingBox | null = null;
+
+        const locateMacroHeaderBox = async (): Promise<BoundingBox> => {
+          try {
+            const previewTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              maxDim: 680,
+              format: 'image/jpeg',
+              quality: 0.8,
+              contrastFilter: false,
+            });
+            const locRes = await fetch('/api/locate-header', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: previewTopRight,
+                mimeType: 'image/jpeg',
+              }),
+            });
+            if (!locRes.ok) return TOP_RIGHT_BOX;
+            const locData = await locRes.json();
+            const inner = locData?.box as BoundingBox | null;
+            if (
+              inner &&
+              typeof inner.xmin === 'number' &&
+              typeof inner.xmax === 'number' &&
+              typeof inner.ymin === 'number' &&
+              typeof inner.ymax === 'number' &&
+              inner.xmax - inner.xmin >= 80 &&
+              inner.ymax - inner.ymin >= 40 &&
+              inner.xmin >= 0 &&
+              inner.xmax <= 1000 &&
+              inner.ymin >= 0 &&
+              inner.ymax <= 1000
+            ) {
+              const paddedInner: BoundingBox = {
+                xmin: Math.max(0, inner.xmin - 140),
+                xmax: 1000,
+                ymin: Math.max(0, inner.ymin - 90),
+                ymax: Math.min(1000, inner.ymax + 90),
+              };
+              const mapped = mapCroppedBoxToFullImage(paddedInner, TOP_RIGHT_BOX);
+              if (mapped && mapped.xmax - mapped.xmin >= 120 && mapped.ymax - mapped.ymin >= 50) {
+                return mapped;
+              }
+            }
+          } catch {
+            // Fall back cleanly to TOP_RIGHT_BOX
+          }
+          return TOP_RIGHT_BOX;
+        };
 
         if (!isCropped && effectiveRegion === 'top-right') {
-          payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            maxDim: 1000,
-            format: 'image/jpeg',
-            quality: 0.92,
+          const macroBox = await locateMacroHeaderBox();
+          payloadDataUrl = await cropRegionDataUrl(imageDataUrl, macroBox, 0, {
+            maxDim: 1300,
+            format: 'image/png',
             contrastFilter: false,
           });
-          resolvedMimeType = 'image/jpeg';
+          resolvedMimeType = 'image/png';
           isCropped = true;
-          originBox = TOP_RIGHT_BOX;
+          originBox = macroBox;
         } else if (!isCropped && effectiveRegion === 'full') {
-          // Send compressed full page + zoomed crisp top-right crop for handwriting accuracy
-          const [compressedFull, zoomedHeader] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1250, 0.85),
-            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              maxDim: 950,
-              format: 'image/jpeg',
-              quality: 0.92,
-              contrastFilter: false,
-            }),
+          // Locate header lines in parallel with full-page compression, then crop lossless PNG macro zoom
+          const [compressedFull, macroBox] = await Promise.all([
+            compressImageDataUrl(imageDataUrl, 1000, 0.82),
+            locateMacroHeaderBox(),
           ]);
+          const macroHeaderPng = await cropRegionDataUrl(imageDataUrl, macroBox, 0, {
+            maxDim: 1300,
+            format: 'image/png',
+            contrastFilter: false,
+          });
           payloadDataUrl = compressedFull;
           resolvedMimeType = 'image/jpeg';
-          headerImageBase64 = zoomedHeader;
+          headerImageBase64 = macroHeaderPng;
+          headerMimeType = 'image/png';
+          headerBoxOrigin = macroBox;
         }
 
         if (options?.applyContrast) {
           payloadDataUrl = await enhanceInkContrastDataUrl(payloadDataUrl);
           if (headerImageBase64) {
             headerImageBase64 = await enhanceInkContrastDataUrl(headerImageBase64);
+            headerMimeType = 'image/jpeg';
           }
           resolvedMimeType = 'image/jpeg';
         }
@@ -141,7 +195,7 @@ export default function App() {
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
             headerImageBase64,
-            headerMimeType: headerImageBase64 ? 'image/jpeg' : undefined,
+            headerMimeType,
             precisionMode: mode,
             isCroppedRegion: isCropped,
             hintText,
@@ -155,14 +209,18 @@ export default function App() {
 
         const result = data.result as ExtractionResult;
 
-        if (isCropped && originBox) {
+        const boxOrigin =
+          isCropped && originBox
+            ? originBox
+            : headerBoxOrigin;
+        if (boxOrigin) {
           result.issueNumberBox = mapCroppedBoxToFullImage(
             result.issueNumberBox,
-            originBox
+            boxOrigin
           );
           result.dateBox = mapCroppedBoxToFullImage(
             result.dateBox,
-            originBox
+            boxOrigin
           );
         }
 
