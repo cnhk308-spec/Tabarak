@@ -449,14 +449,6 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                 </div>
               </div>
 
-              {/* Handwriting Notes */}
-              {documentItem.result.handwritingNotes && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">
-                  <span className="font-semibold text-slate-900">ملاحظة الفحص: </span>
-                  {documentItem.result.handwritingNotes}
-                </div>
-              )}
-
               {/* Title / Recipient / Subject / Body Section */}
               <div className="space-y-3 border-t border-slate-200 pt-4">
                 <div>

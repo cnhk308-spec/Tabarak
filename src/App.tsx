@@ -7,7 +7,7 @@ import { LedgerTableView } from './components/LedgerTableView';
 import { AccuracyGuideView } from './components/AccuracyGuideView';
 import { GeminiKeyButton } from './components/GeminiKeyButton';
 import {
-  extractDocumentWithGeminiBrowser,
+  extractDocumentWithGemini,
   getStoredGeminiApiKey,
   setStoredGeminiApiKey,
 } from './services/geminiExtractor';
@@ -42,19 +42,30 @@ function formatExtractedValue(
   return convertToWesternDigits(base);
 }
 
+function clampValidBox(box: BoundingBox | null | undefined): BoundingBox | null {
+  if (!box) return null;
+  const ymin = Math.max(0, Math.min(999, Math.round(box.ymin)));
+  const xmin = Math.max(0, Math.min(999, Math.round(box.xmin)));
+  const ymax = Math.max(1, Math.min(1000, Math.round(box.ymax)));
+  const xmax = Math.max(1, Math.min(1000, Math.round(box.xmax)));
+  if (xmax - xmin < 8 || ymax - ymin < 6) return null;
+  return { ymin, xmin, ymax, xmax };
+}
+
 function mapCroppedBoxToFullImage(
   innerBox: BoundingBox | null | undefined,
   cropBox: BoundingBox
 ): BoundingBox | null {
-  if (!innerBox) return null;
+  const valid = clampValidBox(innerBox);
+  if (!valid) return null;
   const cropW = cropBox.xmax - cropBox.xmin;
   const cropH = cropBox.ymax - cropBox.ymin;
-  return {
-    xmin: Math.round(cropBox.xmin + (innerBox.xmin / 1000) * cropW),
-    xmax: Math.round(cropBox.xmin + (innerBox.xmax / 1000) * cropW),
-    ymin: Math.round(cropBox.ymin + (innerBox.ymin / 1000) * cropH),
-    ymax: Math.round(cropBox.ymin + (innerBox.ymax / 1000) * cropH),
-  };
+  return clampValidBox({
+    xmin: cropBox.xmin + (valid.xmin / 1000) * cropW,
+    xmax: cropBox.xmin + (valid.xmax / 1000) * cropW,
+    ymin: cropBox.ymin + (valid.ymin / 1000) * cropH,
+    ymax: cropBox.ymin + (valid.ymax / 1000) * cropH,
+  });
 }
 
 export default function App() {
@@ -111,7 +122,8 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            maxDim: 1400,
+            minDim: 1500,
+            maxDim: 1900,
             format: 'image/png',
             contrastFilter: false,
           });
@@ -119,11 +131,12 @@ export default function App() {
           isCropped = true;
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
-          // Send compressed full page + unclipped lossless PNG of TOP_RIGHT_BOX for accurate handwriting OCR
+          // Send compressed full page + unclipped lossless PNG of TOP_RIGHT_BOX
           const [compressedFull, headerPng] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1200, 0.86),
+            compressImageDataUrl(imageDataUrl, 1400, 0.9),
             cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              maxDim: 1400,
+              minDim: 1500,
+              maxDim: 1900,
               format: 'image/png',
               contrastFilter: false,
             }),
@@ -144,9 +157,8 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
         }
 
-        let result: ExtractionResult;
-        if (apiKey.trim()) {
-          result = await extractDocumentWithGeminiBrowser({
+        const result = await extractDocumentWithGemini(
+          {
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
             headerImageBase64,
@@ -154,41 +166,17 @@ export default function App() {
             precisionMode: mode,
             isCroppedRegion: isCropped,
             hintText,
-            apiKey,
-          });
-        } else {
-          const res = await fetch('/api/extract', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              imageBase64: payloadDataUrl,
-              mimeType: resolvedMimeType,
-              headerImageBase64,
-              headerMimeType,
-              precisionMode: mode,
-              isCroppedRegion: isCropped,
-              hintText,
-            }),
-          });
-
-          const contentType = res.headers.get('content-type') || '';
-          const data = contentType.includes('application/json')
-            ? await res.json()
-            : null;
-          if (!res.ok || !data || data.error) {
-            throw new Error(
-              data?.error ||
-                'تعذر الاتصال بخدمة التحليل على الخادم. اضغط على زر المفتاح في أسفل الشاشة لإدخال مفتاح Gemini API والعمل مباشرة.'
-            );
-          }
-
-          result = data.result as ExtractionResult;
-        }
+          },
+          apiKey
+        );
 
         const boxOrigin =
           isCropped && originBox
             ? originBox
-            : headerBoxOrigin;
+            : headerBoxOrigin && result.boxReferenceImage !== 'full_image'
+            ? headerBoxOrigin
+            : null;
+
         if (boxOrigin) {
           result.issueNumberBox = mapCroppedBoxToFullImage(
             result.issueNumberBox,
@@ -198,6 +186,9 @@ export default function App() {
             result.dateBox,
             boxOrigin
           );
+        } else {
+          result.issueNumberBox = clampValidBox(result.issueNumberBox);
+          result.dateBox = clampValidBox(result.dateBox);
         }
 
         const durationMs = Math.round(performance.now() - startedAt);

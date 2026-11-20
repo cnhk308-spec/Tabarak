@@ -166,7 +166,7 @@ export const GeminiKeyButton: React.FC<GeminiKeyButtonProps> = ({
             ? 'opacity-100 border-blue-900 bg-blue-900 text-white shadow-md'
             : hasCustomKey
             ? 'opacity-45 hover:opacity-100 border-emerald-300 bg-white/85 text-emerald-700 shadow-xs backdrop-blur-xs'
-            : 'opacity-30 hover:opacity-100 border-slate-200/80 bg-white/80 text-slate-500 hover:border-slate-300 hover:text-blue-900 shadow-xs backdrop-blur-xs'
+            : 'opacity-25 hover:opacity-100 border-slate-200/80 bg-white/80 text-slate-500 hover:border-slate-300 hover:text-blue-900 shadow-xs backdrop-blur-xs'
         }`}
       >
         <KeyRound className="h-4 w-4" aria-hidden="true" />

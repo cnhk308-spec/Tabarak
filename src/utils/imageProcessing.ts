@@ -33,7 +33,7 @@ export async function loadImageFile(file: File): Promise<{
   });
 
   const img = await loadHtmlImage(rawDataUrl);
-  const maxDim = 2200;
+  const maxDim = 2800;
   let targetWidth = img.naturalWidth;
   let targetHeight = img.naturalHeight;
 
@@ -118,10 +118,95 @@ export async function enhanceInkContrastDataUrl(dataUrl: string): Promise<string
 
 export const TOP_RIGHT_BOX: BoundingBox = {
   ymin: 0,
-  xmin: 320,
-  ymax: 460,
+  xmin: 280,
+  ymax: 500,
   xmax: 1000,
 };
+
+export async function enhanceHandwritingCropDataUrl(dataUrl: string): Promise<string> {
+  const img = await loadHtmlImage(dataUrl);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (w < 4 || h < 4) return dataUrl;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+
+  ctx.drawImage(img, 0, 0, w, h);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  const totalPixels = w * h;
+
+  // Build luminance histogram to stretch paper background to white and ink to deep black
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = Math.min(
+      255,
+      Math.max(0, Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]))
+    );
+    hist[lum]++;
+  }
+
+  let acc = 0;
+  let low = 0;
+  let high = 255;
+  const lowTarget = Math.max(1, Math.floor(totalPixels * 0.01));
+  const highTarget = Math.floor(totalPixels * 0.90);
+
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc >= lowTarget) {
+      low = v;
+      break;
+    }
+  }
+  acc = 0;
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc >= highTarget) {
+      high = v;
+      break;
+    }
+  }
+
+  const range = Math.max(40, high - low);
+  const stretched = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const norm = Math.min(1, Math.max(0, (data[i + c] - low) / range));
+      // Mild gamma < 1 makes faint pen strokes darker while keeping white paper clean
+      const boosted = norm < 0.85 ? Math.pow(norm, 1.18) : norm;
+      stretched[i + c] = Math.round(boosted * 255);
+    }
+    stretched[i + 3] = 255;
+  }
+
+  // Gentle 3x3 sharpening pass to crisp up pen stroke hooks and dots
+  const out = new Uint8ClampedArray(stretched);
+  const amount = 0.22;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const center = stretched[idx + c];
+        const neighbors =
+          stretched[idx - 4 + c] +
+          stretched[idx + 4 + c] +
+          stretched[idx - w * 4 + c] +
+          stretched[idx + w * 4 + c];
+        const sharp = center * (1 + 4 * amount) - neighbors * amount;
+        out[idx + c] = Math.min(255, Math.max(0, Math.round(sharp)));
+      }
+    }
+  }
+
+  imageData.data.set(out);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
 
 export async function compressImageDataUrl(
   dataUrl: string,
