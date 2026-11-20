@@ -22,20 +22,19 @@ interface ExtractRequestBody {
 const fastExtractionSchema = {
   type: Type.OBJECT,
   properties: {
-    rightmostDigitCheck: {
+    handwritingAnalysis: {
       type: Type.STRING,
       description:
-        'افحص الفراغ الملاصق تماماً ليسار عبارة (العدد :) أو الشرطة (/) على جهة اليمين: ما هو الرقم أو الشكل المكتوب هناك مباشرةً قبل النقطتين (مثل ٦ أو ٨ أو ٤ أو ١)؟ لا تعتبره علامة ترقيم.',
+        'قراءة بصرية حرفية لما هو مكتوب بخط اليد في حقل العدد وحقل التاريخ: اذكر كل حرف ورقم تراه بالترتيب مع الانتباه للخانات الطرفية القريبة من النقطتين (:) أو الشرطة (/).',
     },
-    leftToRightDigits: {
-      type: Type.STRING,
-      description:
-        'اقرأ كل خانة مستقلة في العدد من أقصى اليسار إلى أقصى اليمين مفصولة بمسافة (مثال توضيحي: ١ ٢ ٨ ٥) متضمنة الخانة المرصودة في rightmostDigitCheck.',
+    digitCount: {
+      type: Type.INTEGER,
+      description: 'عدد الخانات الرقمية الفعلية في حقل العدد.',
     },
     issueNumber: {
       type: Type.STRING,
       description:
-        'العدد النهائي كاملاً كما هو مكتوب بخط اليد مع أي حروف أو شرطات مائلة مطابقاً لجميع الخانات في leftToRightDigits.',
+        'العدد المكتوب بالضبط في الصورة (بكل أرقامه وحروفه وشرطاته المائلة) مطابقاً لـ handwritingAnalysis دون إسقاط أي خانة.',
     },
     alternativeIssueNumber: {
       type: Type.STRING,
@@ -72,8 +71,8 @@ const fastExtractionSchema = {
     },
   },
   required: [
-    'rightmostDigitCheck',
-    'leftToRightDigits',
+    'handwritingAnalysis',
+    'digitCount',
     'issueNumber',
     'date',
     'title',
@@ -88,18 +87,17 @@ const fastExtractionSchema = {
 const ultraExtractionSchema = {
   type: Type.OBJECT,
   properties: {
-    rightmostDigitCheck: {
+    handwritingAnalysis: {
       type: Type.STRING,
-      description:
-        'افحص الحبر اليدوي الملاصق تماماً ليسار عبارة (العدد :) أو الشرطة (/) على جهة اليمين: ما الرقم المكتوب هناك مباشرةً (مثل ٦ أو ٨ أو ٤ أو ١)؟',
+      description: 'قراءة بصرية تفصيلية لكل رقم وحرف مكتوب بخط اليد في العدد والتاريخ.',
     },
-    leftToRightDigits: {
-      type: Type.STRING,
-      description: 'جميع خانات العدد مفصولة بمسافة من أقصى اليسار إلى أقصى اليمين.',
+    digitCount: {
+      type: Type.INTEGER,
+      description: 'عدد الخانات الرقمية الفعلية في حقل العدد.',
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description: 'العدد كما هو مكتوب بالضبط في الكتاب مطابقاً لـ leftToRightDigits.',
+      description: 'العدد كما هو مكتوب بالضبط في الكتاب مطابقاً لـ handwritingAnalysis.',
     },
     issueNumberNormalized: {
       type: Type.STRING,
@@ -185,8 +183,8 @@ const ultraExtractionSchema = {
     },
   },
   required: [
-    'rightmostDigitCheck',
-    'leftToRightDigits',
+    'handwritingAnalysis',
+    'digitCount',
     'issueNumberRaw',
     'issueNumberNormalized',
     'issueNumberConfidence',
@@ -198,25 +196,25 @@ const ultraExtractionSchema = {
   ],
 };
 
-const HANDWRITING_RULES = `قواعد صارمة لقراءة الأرقام الهندية/العربية المكتوبة بخط اليد:
-- ركّز على الحبر اليدوي بجانب كلمة "العدد :" وكلمة "التاريخ :".
-- خطأ شائع يجب منعه تماماً: كثير من الأرقام الرباعية تُكتب فيها الخانة الرابعة (الآحاد على اليمين، مثل ٦ أو ٨ أو ٤ أو ١) قريبة من النقطتين ":" أو فوق الخط المنقط، فتُسقط خطأً (مثلاً يُقرأ رقم من ٤ خانات كأنه ٣ خانات فقط!). افحص المنطقة بين النقطتين ":" والخانة التي تليها بعناية فائقة ولا تسقط الخانة اليمنى أبداً.
-- لا تدمج رقمين متقاربين (مثل ٨ و ٦ فتقرأهما ٢، أو ٧ و ٨).
-- تمييز الأشكال اليدوية بدقة:
+const HANDWRITING_RULES = `قواعد قراءة الأرقام الهندية/العربية المكتوبة بخط اليد بدقة تامة:
+- افحص الحبر اليدوي بجانب أو أسفل كلمة "العدد :" وكلمة "التاريخ :".
+- تتبّع كل رقم على حدة من طرف إلى طرف ولا تسقط أي خانة قريبة من النقطتين ":" أو فوق الخط المنقط أو متداخلة مع الشرطة "/".
+- لا تدمج رقمين متقاربين في رقم واحد (مثلاً: ٨ و ٦ المتجاورتان هما رقمان منفصلان وليس ٢، و٧ و٨ منفصلتان).
+- تمييز الأشكال اليدوية:
   * (٠): نقطة أو دائرة صغيرة جداً، و(٥): دائرة مغلقة أو شكل قلب واضح.
-  * (٢): قوسه العلوي متجه لليمين، أما (٦): قوسه/زاويته العليا متجهة لليسار ثم ينزل عمودياً للأسفل.
-  * (٣): له أسنان متموجة في الأعلى، أما (٢): سن واحد منحني.
+  * (٢): قوسه العلوي يتجه يميناً ثم ينزل، أما (٦): زاويته/قوسه العلوي يتجه يساراً ثم ينزل عمودياً.
+  * (٣): له أسنان متموجة في الأعلى، أما (٢): قوس واحد.
   * (٧): مفتوح للأعلى (∨)، أما (٨): مفتوح للأسفل (∧).
   * (١): خط عمودي مفرد، و(٩): حلقة مغلقة في الأعلى مع ذيل للأسفل.
-- اكتب أولاً rightmostDigitCheck ثم leftToRightDigits ثم اكتب العدد النهائي مطابقاً لهما بالكامل.`;
+- لا تخمّن أو تغيّر أرقاماً واضحة؛ اكتب في handwritingAnalysis ما تراه بالضبط ثم انقل النتيجة المطابقة لحقل العدد.`;
 
 const FAST_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة الكتب الرسمية العربية وخط اليد بدقة عالية.
-- إذا وُجدت صورتان: الصورة الأولى هي تقريب مكبّر للترويسة العليا اليمنى (PNG عالي الوضوح)، اعتمد عليها أساساً لقراءة (العدد) و(التاريخ) بخط اليد؛ والصورة الثانية هي الكتاب كاملاً لاستخراج العنوان و(إلى/) و(م/) ومضمون الكتاب.
+- إذا وُجدت صورتان: الصورة الأولى هي تقريب للزاوية العليا اليمنى من الكتاب (PNG بدون فقدان)، اقرأ منها (العدد) و(التاريخ) بخط اليد؛ وإذا لم يظهرا فيها فاقرأهما من الصورة الثانية (الصفحة كاملة). استخدم الصورة الثانية أيضاً لاستخراج العنوان و(إلى/) و(م/) ومضمون الكتاب.
 ${HANDWRITING_RULES}
 - استخرج recipient بعد (إلى/) وsubject بعد (م/)، وإذا لم يوجدا ضَع العنوان مثل (أمر جامعي) في title، وانسخ مضمون الكتاب كاملاً في bodyContent.`;
 
 const ULTRA_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرشفة الكتب الرسمية العربية وخط اليد بدقة فائقة.
-- عند وجود صورتين: الصورة الأولى هي الترويسة المكبّرة لقراءة (العدد) و(التاريخ) ومربعيهما (0..1000 نسبة للصورة الأولى)، والصورة الثانية هي الكتاب كاملاً لاستخراج الجهة المصدرة والعنوان و(إلى/) و(م/) ومضمون الكتاب.
+- عند وجود صورتين: الصورة الأولى هي تقريب الزاوية العليا اليمنى لقراءة (العدد) و(التاريخ) ومربعيهما (0..1000 نسبة للصورة الأولى)، والصورة الثانية هي الكتاب كاملاً لاستخراج الجهة المصدرة والعنوان و(إلى/) و(م/) ومضمون الكتاب.
 ${HANDWRITING_RULES}
 - إذا كان هناك غموض أو تداخل مع الختم خفّض مستوى الثقة واذكر قراءة بديلة وملاحظة واضحة.`;
 
@@ -282,82 +280,9 @@ function getAiClient(): GoogleGenAI {
   });
 }
 
-const headerLocationSchema = {
-  type: Type.OBJECT,
-  properties: {
-    found: {
-      type: Type.BOOLEAN,
-      description: 'هل تم العثور على سطر العدد أو التاريخ في الصورة.',
-    },
-    ymin: { type: Type.INTEGER, description: 'الحد العلوي للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
-    xmin: { type: Type.INTEGER, description: 'الحد الأيسر للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
-    ymax: { type: Type.INTEGER, description: 'الحد السفلي للمنطقة المحيطة بسطري العدد والتاريخ (0..1000).' },
-    xmax: { type: Type.INTEGER, description: 'الحد الأيمن شامل عبارة العدد: والتاريخ: (0..1000).' },
-  },
-  required: ['found', 'ymin', 'xmin', 'ymax', 'xmax'],
-};
-
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
-
-  app.post('/api/locate-header', async (req, res) => {
-    try {
-      const body = (req.body || {}) as { imageBase64?: string; mimeType?: string };
-      if (!body.imageBase64 || typeof body.imageBase64 !== 'string') {
-        res.json({ box: null });
-        return;
-      }
-      const ai = getAiClient();
-      const cleanBase64 = body.imageBase64.includes(',')
-        ? body.imageBase64.split(',')[1]
-        : body.imageBase64;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: body.mimeType || 'image/jpeg',
-                data: cleanBase64,
-              },
-            },
-            {
-              text: 'حدد الإحداثيات (0 إلى 1000) لمربع واحد يضم كلمتي (العدد) و(التاريخ) على اليمين وكامل القيم المكتوبة بخط اليد على يسارهما أو أسفلهما دون قص أي رقم.',
-            },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: headerLocationSchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
-        },
-      });
-
-      const text = (response.text ?? '').trim();
-      if (!text) {
-        res.json({ box: null });
-        return;
-      }
-      const parsed = JSON.parse(text);
-      if (!parsed.found) {
-        res.json({ box: null });
-        return;
-      }
-      res.json({
-        box: {
-          ymin: parsed.ymin,
-          xmin: parsed.xmin,
-          ymax: parsed.ymax,
-          xmax: parsed.xmax,
-        },
-      });
-    } catch {
-      res.json({ box: null });
-    }
-  });
 
   app.post('/api/extract', async (req, res) => {
     try {
@@ -380,7 +305,7 @@ async function startServer() {
             ? body.headerImageBase64.split(',')[1]
             : body.headerImageBase64
           : null;
-      const headerMimeType = body.headerMimeType || 'image/jpeg';
+      const headerMimeType = body.headerMimeType || 'image/png';
 
       const isUltra = body.precisionMode === 'ultra';
       const hintLine =
@@ -410,10 +335,10 @@ async function startServer() {
 
       contentParts.push({
         text: cleanHeaderBase64
-          ? `اقرأ العدد والتاريخ بخط اليد بدقة تامة من الصورة الأولى (الترويسة المكبّرة) مع التحقق أولاً من الخانة اليمنى الملاصقة لعبارة العدد والنقطتين ثم قراءة جميع الخانات من اليسار لليمين، واستخرج من الصورة الثانية العنوان أو إلى/م ومضمون الكتاب.${hintLine}`
+          ? `اقرأ العدد والتاريخ المكتوبين بخط اليد بدقة من الترويسة المكبّرة (الصورة الأولى) بعد فحص جميع الخانات، واستخرج من الصفحة الكاملة (الصورة الثانية) العنوان أو إلى/م ومضمون الكتاب.${hintLine}`
           : body.isCroppedRegion
-          ? `اقرأ العدد والتاريخ المكتوبين بخط اليد من هذه الترويسة مع التحقق من الخانة اليمنى الملاصقة لعبارة العدد والنقطتين.${hintLine}`
-          : `استخرج العدد والتاريخ بخط اليد بدقة تامة والعنوان أو إلى/م ومضمون الكتاب كاملاً.${hintLine}`,
+          ? `اقرأ العدد والتاريخ المكتوبين بخط اليد بدقة من هذه المنطقة المقصوصة.${hintLine}`
+          : `استخرج العدد والتاريخ بخط اليد بدقة والعنوان أو إلى/م ومضمون الكتاب كاملاً.${hintLine}`,
       });
 
       const callModel = (

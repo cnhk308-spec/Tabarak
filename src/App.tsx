@@ -102,81 +102,30 @@ export default function App() {
         let originBox = options?.cropOriginBox;
         let headerBoxOrigin: BoundingBox | null = null;
 
-        const locateMacroHeaderBox = async (): Promise<BoundingBox> => {
-          try {
-            const previewTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              maxDim: 680,
-              format: 'image/jpeg',
-              quality: 0.8,
-              contrastFilter: false,
-            });
-            const locRes = await fetch('/api/locate-header', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: previewTopRight,
-                mimeType: 'image/jpeg',
-              }),
-            });
-            if (!locRes.ok) return TOP_RIGHT_BOX;
-            const locData = await locRes.json();
-            const inner = locData?.box as BoundingBox | null;
-            if (
-              inner &&
-              typeof inner.xmin === 'number' &&
-              typeof inner.xmax === 'number' &&
-              typeof inner.ymin === 'number' &&
-              typeof inner.ymax === 'number' &&
-              inner.xmax - inner.xmin >= 80 &&
-              inner.ymax - inner.ymin >= 40 &&
-              inner.xmin >= 0 &&
-              inner.xmax <= 1000 &&
-              inner.ymin >= 0 &&
-              inner.ymax <= 1000
-            ) {
-              const paddedInner: BoundingBox = {
-                xmin: Math.max(0, inner.xmin - 140),
-                xmax: 1000,
-                ymin: Math.max(0, inner.ymin - 90),
-                ymax: Math.min(1000, inner.ymax + 90),
-              };
-              const mapped = mapCroppedBoxToFullImage(paddedInner, TOP_RIGHT_BOX);
-              if (mapped && mapped.xmax - mapped.xmin >= 120 && mapped.ymax - mapped.ymin >= 50) {
-                return mapped;
-              }
-            }
-          } catch {
-            // Fall back cleanly to TOP_RIGHT_BOX
-          }
-          return TOP_RIGHT_BOX;
-        };
-
         if (!isCropped && effectiveRegion === 'top-right') {
-          const macroBox = await locateMacroHeaderBox();
-          payloadDataUrl = await cropRegionDataUrl(imageDataUrl, macroBox, 0, {
-            maxDim: 1300,
+          payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+            maxDim: 1400,
             format: 'image/png',
             contrastFilter: false,
           });
           resolvedMimeType = 'image/png';
           isCropped = true;
-          originBox = macroBox;
+          originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
-          // Locate header lines in parallel with full-page compression, then crop lossless PNG macro zoom
-          const [compressedFull, macroBox] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1000, 0.82),
-            locateMacroHeaderBox(),
+          // Send compressed full page + unclipped lossless PNG of TOP_RIGHT_BOX for accurate handwriting OCR
+          const [compressedFull, headerPng] = await Promise.all([
+            compressImageDataUrl(imageDataUrl, 1200, 0.86),
+            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              maxDim: 1400,
+              format: 'image/png',
+              contrastFilter: false,
+            }),
           ]);
-          const macroHeaderPng = await cropRegionDataUrl(imageDataUrl, macroBox, 0, {
-            maxDim: 1300,
-            format: 'image/png',
-            contrastFilter: false,
-          });
           payloadDataUrl = compressedFull;
           resolvedMimeType = 'image/jpeg';
-          headerImageBase64 = macroHeaderPng;
+          headerImageBase64 = headerPng;
           headerMimeType = 'image/png';
-          headerBoxOrigin = macroBox;
+          headerBoxOrigin = TOP_RIGHT_BOX;
         }
 
         if (options?.applyContrast) {
@@ -202,9 +151,15 @@ export default function App() {
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok || data.error) {
-          throw new Error(data.error || 'تعذر الاتصال بخدمة التحليل.');
+        const contentType = res.headers.get('content-type') || '';
+        const data = contentType.includes('application/json')
+          ? await res.json()
+          : null;
+        if (!res.ok || !data || data.error) {
+          throw new Error(
+            data?.error ||
+              'تعذر الاتصال بخدمة التحليل على الخادم (تأكد من تشغيل خادم التطبيق).'
+          );
         }
 
         const result = data.result as ExtractionResult;

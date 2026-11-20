@@ -118,8 +118,8 @@ export async function enhanceInkContrastDataUrl(dataUrl: string): Promise<string
 
 export const TOP_RIGHT_BOX: BoundingBox = {
   ymin: 0,
-  xmin: 350,
-  ymax: 440,
+  xmin: 320,
+  ymax: 460,
   xmax: 1000,
 };
 
