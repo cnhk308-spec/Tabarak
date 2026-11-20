@@ -119,9 +119,31 @@ export async function enhanceInkContrastDataUrl(dataUrl: string): Promise<string
 export const TOP_RIGHT_BOX: BoundingBox = {
   ymin: 0,
   xmin: 350,
-  ymax: 550,
+  ymax: 440,
   xmax: 1000,
 };
+
+export async function compressImageDataUrl(
+  dataUrl: string,
+  maxDim = 1250,
+  quality = 0.85
+): Promise<string> {
+  const img = await loadHtmlImage(dataUrl);
+  let targetW = img.naturalWidth;
+  let targetH = img.naturalHeight;
+  if (targetW > maxDim || targetH > maxDim) {
+    const scale = maxDim / Math.max(targetW, targetH);
+    targetW = Math.round(targetW * scale);
+    targetH = Math.round(targetH * scale);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+  ctx.drawImage(img, 0, 0, targetW, targetH);
+  return canvas.toDataURL('image/jpeg', quality);
+}
 
 export async function cropRegionDataUrl(
   dataUrl: string,

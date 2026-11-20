@@ -23,7 +23,14 @@ interface ExtractionPanelProps {
   onChangeDigitPreference: (pref: DigitPreference) => void;
   onUpdateField: (
     id: string,
-    field: 'editedIssueNumber' | 'editedDate' | 'editedIssuingEntity' | 'editedRecipient' | 'editedSubject',
+    field:
+      | 'editedIssueNumber'
+      | 'editedDate'
+      | 'editedIssuingEntity'
+      | 'editedTitle'
+      | 'editedRecipient'
+      | 'editedSubject'
+      | 'editedBodyContent',
     value: string
   ) => void;
   onVerifyDocument: (id: string) => void;
@@ -450,28 +457,24 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                 </div>
               )}
 
-              {/* Additional Archival Context */}
+              {/* Title / Recipient / Subject / Body Section */}
               <div className="space-y-3 border-t border-slate-200 pt-4">
                 <div>
                   <label
-                    htmlFor="field-entity"
+                    htmlFor="field-title"
                     className="block text-xs font-medium text-slate-600 mb-1"
                   >
-                    الجهة المصدرة (اختياري للأرشفة)
+                    عنوان الكتاب (مثل: أمر جامعي، إعمام)
                   </label>
                   <input
-                    id="field-entity"
+                    id="field-title"
                     type="text"
-                    value={documentItem.editedIssuingEntity}
+                    value={documentItem.editedTitle}
                     onChange={(e) =>
-                      onUpdateField(
-                        documentItem.id,
-                        'editedIssuingEntity',
-                        e.target.value
-                      )
+                      onUpdateField(documentItem.id, 'editedTitle', e.target.value)
                     }
-                    placeholder="—"
-                    className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 focus:border-blue-900 focus:bg-white focus:outline-none"
+                    placeholder="يظهر تلقائياً عند غياب إلى/ و م/"
+                    className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-900 focus:bg-white focus:outline-none"
                   />
                 </div>
                 <div>
@@ -479,7 +482,7 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                     htmlFor="field-recipient"
                     className="block text-xs font-medium text-slate-600 mb-1"
                   >
-                    إلى (المرسل إليه / الجهة المستلمة)
+                    إلى / (المرسل إليه)
                   </label>
                   <input
                     id="field-recipient"
@@ -505,6 +508,66 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                     value={documentItem.editedSubject}
                     onChange={(e) =>
                       onUpdateField(documentItem.id, 'editedSubject', e.target.value)
+                    }
+                    placeholder="—"
+                    className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 focus:border-blue-900 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      htmlFor="field-body-content"
+                      className="block text-xs font-semibold text-slate-800"
+                    >
+                      مضمون الكتاب
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy('body', documentItem.editedBodyContent)}
+                      disabled={!documentItem.editedBodyContent}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-900 hover:text-blue-700 disabled:opacity-40 cursor-pointer"
+                    >
+                      {copiedKey === 'body' ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-700" aria-hidden="true" />
+                          <span className="text-emerald-700">تم نسخ المضمون</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" aria-hidden="true" />
+                          <span>نسخ المضمون</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <textarea
+                    id="field-body-content"
+                    rows={5}
+                    value={documentItem.editedBodyContent}
+                    onChange={(e) =>
+                      onUpdateField(documentItem.id, 'editedBodyContent', e.target.value)
+                    }
+                    placeholder="سيظهر هنا النص الكامل لمضمون الكتاب..."
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-900 focus:border-blue-900 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="field-entity"
+                    className="block text-xs font-medium text-slate-600 mb-1"
+                  >
+                    الجهة المصدرة (اختياري للأرشفة)
+                  </label>
+                  <input
+                    id="field-entity"
+                    type="text"
+                    value={documentItem.editedIssuingEntity}
+                    onChange={(e) =>
+                      onUpdateField(
+                        documentItem.id,
+                        'editedIssuingEntity',
+                        e.target.value
+                      )
                     }
                     placeholder="—"
                     className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 focus:border-blue-900 focus:bg-white focus:outline-none"

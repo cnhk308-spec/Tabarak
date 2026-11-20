@@ -42,9 +42,11 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
         doc.fileName.toLowerCase().includes(q) ||
         doc.editedIssueNumber.toLowerCase().includes(q) ||
         doc.editedDate.toLowerCase().includes(q) ||
+        doc.editedTitle.toLowerCase().includes(q) ||
         doc.editedIssuingEntity.toLowerCase().includes(q) ||
         doc.editedRecipient.toLowerCase().includes(q) ||
-        doc.editedSubject.toLowerCase().includes(q)
+        doc.editedSubject.toLowerCase().includes(q) ||
+        doc.editedBodyContent.toLowerCase().includes(q)
       );
     });
   }, [documents, filterStatus, searchQuery]);
@@ -56,8 +58,10 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
       'العدد',
       'التاريخ',
       'التقويم',
+      'العنوان',
       'إلى (المرسل إليه)',
       'الموضوع',
+      'مضمون الكتاب',
       'الحالة',
     ];
     const rows = filteredDocs.map((doc, idx) => [
@@ -70,8 +74,10 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
         : doc.result?.calendarType === 'gregorian'
         ? 'ميلادي'
         : '',
+      doc.editedTitle,
       doc.editedRecipient,
       doc.editedSubject,
+      doc.editedBodyContent,
       doc.userVerified ? 'معتمد' : 'قيد المراجعة',
     ]);
 
@@ -98,8 +104,10 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
       issueNumber: doc.editedIssueNumber,
       date: doc.editedDate,
       calendarType: doc.result?.calendarType || 'unknown',
+      title: doc.editedTitle,
       recipient: doc.editedRecipient,
       subject: doc.editedSubject,
+      bodyContent: doc.editedBodyContent,
       verified: doc.userVerified,
     }));
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -235,7 +243,7 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
                 <th className="py-2.5 px-4">الكتاب</th>
                 <th className="py-2.5 px-4">العدد</th>
                 <th className="py-2.5 px-4">التاريخ</th>
-                <th className="py-2.5 px-4">الجهة المصدرة</th>
+                <th className="py-2.5 px-4">العنوان / الموضوع</th>
                 <th className="py-2.5 px-4">الحالة</th>
                 <th className="py-2.5 px-4 text-left">إجراءات</th>
               </tr>
@@ -261,9 +269,9 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
                         <div className="font-medium text-slate-900 truncate max-w-[180px]">
                           {doc.fileName}
                         </div>
-                        {doc.editedSubject && (
+                        {doc.editedRecipient && (
                           <div className="text-[11px] text-slate-500 truncate max-w-[200px]">
-                            {doc.editedSubject}
+                            إلى: {doc.editedRecipient}
                           </div>
                         )}
                       </div>
@@ -275,8 +283,8 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
                   <td className="py-2.5 px-4 font-mono text-sm font-medium text-slate-800 tabular-nums">
                     <span dir="ltr">{doc.editedDate || '—'}</span>
                   </td>
-                  <td className="py-2.5 px-4 text-slate-600 max-w-[180px] truncate">
-                    {doc.editedIssuingEntity || '—'}
+                  <td className="py-2.5 px-4 text-slate-700 max-w-[220px] truncate">
+                    {doc.editedTitle || doc.editedSubject || '—'}
                   </td>
                   <td className="py-2.5 px-4 whitespace-nowrap">
                     {doc.userVerified ? (

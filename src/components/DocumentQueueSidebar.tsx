@@ -67,6 +67,17 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
           >
             <button
               type="button"
+              onClick={() => onChangeScanRegion('full')}
+              className={`min-h-[36px] rounded-md px-2 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                scanRegion === 'full'
+                  ? 'bg-white text-blue-900 font-semibold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              الكتاب كاملاً
+            </button>
+            <button
+              type="button"
               onClick={() => onChangeScanRegion('top-right')}
               className={`min-h-[36px] rounded-md px-2 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 scanRegion === 'top-right'
@@ -74,22 +85,11 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              العلوي الأيمن
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeScanRegion('full')}
-              className={`min-h-[36px] rounded-md px-2 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                scanRegion === 'full'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              كامل الصفحة
+              العلوي الأيمن فقط
             </button>
           </div>
           <p className="text-[11px] leading-relaxed text-slate-500">
-            يُقصر التحليل على الزاوية العليا اليمنى فقط لقراءة سريعة ومركّزة.
+            يستخرج في «الكتاب كاملاً» العدد والتاريخ والعنوان أو إلى/م ومضمون الكتاب مع تقريب مكبّر للزاوية العليا اليمنى.
           </p>
         </div>
 

@@ -30,8 +30,10 @@ export interface ExtractionResult {
   dateBox?: BoundingBox | null;
 
   issuingEntity?: string;
+  title?: string;
   recipient?: string;
   subject?: string;
+  bodyContent?: string;
   handwritingNotes?: string;
   isHandwrittenDetected?: boolean;
 }
@@ -55,7 +57,9 @@ export interface DocumentItem {
   editedIssueNumber: string;
   editedDate: string;
   editedIssuingEntity: string;
+  editedTitle: string;
   editedRecipient: string;
   editedSubject: string;
+  editedBodyContent: string;
   userVerified: boolean;
 }

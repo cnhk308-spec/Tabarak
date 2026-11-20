@@ -92,9 +92,22 @@ const extractionResponseSchema = {
       type: Type.STRING,
       description: 'اسم الوزارة أو الدائرة أو الجهة المصدرة للكتاب إن ظهر في الترويسة، وإلا سلسلة فارغة.',
     },
+    title: {
+      type: Type.STRING,
+      description:
+        'العنوان الرئيسي في منتصف الورقة مثل (أمر جامعي) أو (أمر إداري) أو (إعمام)، خصوصاً عند عدم وجود (إلى/) و(م/)، وإلا سلسلة فارغة.',
+    },
+    recipient: {
+      type: Type.STRING,
+      description: 'النص الواقع بعد عبارة (إلى /) إن وجد في منتصف الكتاب، وإلا سلسلة فارغة.',
+    },
     subject: {
       type: Type.STRING,
-      description: 'موضوع الكتاب (م / ...) باختصار إن ظهر في الصورة، وإلا سلسلة فارغة.',
+      description: 'النص الواقع بعد عبارة (م /) إن وجد في منتصف الكتاب، وإلا سلسلة فارغة.',
+    },
+    bodyContent: {
+      type: Type.STRING,
+      description: 'مضمون الكتاب كاملاً (النص الأساسي للرسالة الرسمية) مكتوباً بدقة.',
     },
     handwritingNotes: {
       type: Type.STRING,
@@ -129,13 +142,22 @@ const fastExtractionSchema = {
       type: Type.STRING,
       description: 'التاريخ كما هو مكتوب بالضبط بخط اليد.',
     },
+    title: {
+      type: Type.STRING,
+      description:
+        'العنوان الرئيسي للكتاب مثل (أمر جامعي) أو (أمر إداري) في منتصف الورقة، خاصةً إذا لم يوجد (إلى/) و(م/)، وإلا سلسلة فارغة.',
+    },
     recipient: {
       type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (إلى /) في منتصف الكتاب (الجهة الموجه إليها).',
+      description: 'النص الواقع بعد عبارة (إلى /) في منتصف الكتاب إن وجد، وإلا سلسلة فارغة.',
     },
     subject: {
       type: Type.STRING,
-      description: 'النص الواقع بعد عبارة (م /) في منتصف الكتاب (موضوع الكتاب).',
+      description: 'النص الواقع بعد عبارة (م /) في منتصف الكتاب إن وجد، وإلا سلسلة فارغة.',
+    },
+    bodyContent: {
+      type: Type.STRING,
+      description: 'مضمون الكتاب كاملاً (النص الأساسي في جسم الكتاب) منسوخاً بدقة ووضوح، وإلا سلسلة فارغة.',
     },
     confidence: {
       type: Type.STRING,
@@ -146,14 +168,17 @@ const fastExtractionSchema = {
       description: 'gregorian أو hijri أو unknown',
     },
   },
-  required: ['issueNumber', 'date', 'recipient', 'subject', 'confidence', 'calendar'],
+  required: ['issueNumber', 'date', 'title', 'recipient', 'subject', 'bodyContent', 'confidence', 'calendar'],
 };
 
-const FAST_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة الكتب الرسمية العربية.
-مهمتك الأساسية:
-1. استخرج (العدد) و(التاريخ) المكتوبين بخط اليد بدقة 100% (ميّز بدقة بين ٢ و٣، و٦ و٢، و٧ و٨، ولا تسقط أي خانة مثل ٥٠٨٦).
-2. استخرج نص (إلى / ...) الموجود في منتصف الكتاب (الجهة الموجه إليها).
-3. استخرج نص (م / ...) الموجود في منتصف الكتاب (موضوع الكتاب).`;
+const FAST_SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرشفة الكتب الرسمية العربية.
+مهمتك:
+1. استخرج (العدد) و(التاريخ) المكتوبين بخط اليد بدقة 100% (ميّز بدقة بين ٢ و٣، و٦ و٢، و٧ و٨، ولا تسقط أي خانة مثل ٥٠٨٦). إذا أُرفقت صورة ثانية مكبّرة للترويسة فاعتمد عليها لقراءة العدد والتاريخ.
+2. في منتصف الورقة:
+   - إذا وُجدت (إلى / ...) فضَعها في recipient.
+   - إذا وُجدت (م / ...) فضَعها في subject.
+   - إذا لم يوجد (إلى/) و(م/) أو وُجد عنوان مركزي بارز مثل (أمر جامعي) أو (أمر إداري) أو (إعمام) فضَعه في title (العنوان).
+3. استخرج مضمون الكتاب كاملاً (نص المتن الرئيسي للكتاب) في bodyContent بدقة دون اختصار أو تحريف.`;
 
 function toWesternDigits(str: string): string {
   const eastern = '٠١٢٣٤٥٦٧٨٩';
@@ -198,8 +223,9 @@ const SYSTEM_INSTRUCTION = `أنت خبير متخصص في قراءة وأرش�
    - اقرأ التاريخ كما كُتب بالضبط في dateRaw.
    - إذا كان التاريخ بصيغة يوم/شهر/سنة (مثل 14/11/2025 أو ١٤-١١-٢٥) فحوّله في dateNormalized إلى صيغة YYYY/MM/DD (مثل 2025/11/14).
    - حدد إن كان التقويم ميلادياً (gregorian) أم هجرياً (hijri) بناءً على السنة (مثلاً 1445–1448 هجري، 2020–2030 ميلادي) أو لفظة "هـ" / "م".
-5. حدد مربعات الإحاطة (issueNumberBox و dateBox) بدقة على منطقة القيمة المكتوبة نفسها (مع هامش بسيط حولها) بإحداثيات من 0 إلى 1000.
-6. لا تخمّن أبداً رقماً غير موجود. إذا كان هناك غموض أو طمس أو تداخل مع الختم، خفّض مستوى الثقة إلى medium أو low واذكر القراءة البديلة والملاحظة بوضوح.`;
+5. حدد مربعات الإحاطة (issueNumberBox و dateBox) بدقة على منطقة القيمة المكتوبة نفسها في الصورة الأولى بإحداثيات من 0 إلى 1000.
+6. استخرج نص (إلى/) في recipient ونص (م/) في subject، وعند عدم وجودهما (أو وجود عنوان بارز وسط الصفحة مثل أمر جامعي أو أمر إداري) ضعه في title، واكتب مضمون الكتاب كاملاً في bodyContent بدقة.
+7. لا تخمّن أبداً رقماً غير موجود. إذا كان هناك غموض أو طمس أو تداخل مع الختم، خفّض مستوى الثقة إلى medium أو low واذكر القراءة البديلة والملاحظة بوضوح.`;
 
 async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
   let lastError: unknown;
@@ -237,9 +263,19 @@ async function startServer() {
         return;
       }
 
-      const { imageBase64, mimeType, precisionMode, isCroppedRegion, hintText } = req.body as {
+      const {
+        imageBase64,
+        mimeType,
+        headerImageBase64,
+        headerMimeType,
+        precisionMode,
+        isCroppedRegion,
+        hintText,
+      } = req.body as {
         imageBase64?: string;
         mimeType?: string;
+        headerImageBase64?: string;
+        headerMimeType?: string;
         precisionMode?: 'standard' | 'ultra';
         isCroppedRegion?: boolean;
         hintText?: string;
@@ -255,35 +291,55 @@ async function startServer() {
         : imageBase64;
       const resolvedMimeType = mimeType || 'image/jpeg';
 
+      const cleanHeaderBase64 = headerImageBase64
+        ? headerImageBase64.includes(',')
+          ? headerImageBase64.split(',')[1]
+          : headerImageBase64
+        : null;
+
       const isUltra = precisionMode === 'ultra';
       const primaryModel = 'gemini-4-hydrogen';
       const primaryThinking = isUltra ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
 
       const userPromptParts = [
-        isCroppedRegion
+        cleanHeaderBase64
+          ? 'الصورة الأولى هي الكتاب الرسمي كاملاً لاستخراج (العنوان مثل أمر جامعي عند عدم وجود إلى/م، و إلى/، و م/، ومضمون الكتاب كاملاً)، والصورة الثانية هي تقريب مكبّر للجزء العلوي الأيمن لقراءة العدد والتاريخ المكتوبين بخط اليد بدقة تامة.'
+          : isCroppedRegion
           ? 'اقرأ العدد والتاريخ المكتوبين بخط اليد من هذه الترويسة المقصوصة.'
-          : 'استخرج العدد والتاريخ المكتوبين بخط اليد من الكتاب الرسمي.',
+          : 'استخرج العدد والتاريخ المكتوبين بخط اليد والعنوان أو إلى/م ومضمون الكتاب كاملاً.',
       ];
 
       if (hintText && hintText.trim().length > 0) {
         userPromptParts.push(`تلميح: ${hintText.trim()}`);
       }
 
+      const contentParts: any[] = [
+        {
+          inlineData: {
+            mimeType: resolvedMimeType,
+            data: cleanBase64,
+          },
+        },
+      ];
+
+      if (cleanHeaderBase64) {
+        contentParts.push({
+          inlineData: {
+            mimeType: headerMimeType || 'image/jpeg',
+            data: cleanHeaderBase64,
+          },
+        });
+      }
+
+      contentParts.push({
+        text: userPromptParts.join(' '),
+      });
+
       const callModel = (model: string, thinkingLevel: ThinkingLevel) =>
         ai.models.generateContent({
           model,
           contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: resolvedMimeType,
-                  data: cleanBase64,
-                },
-              },
-              {
-                text: userPromptParts.join(' '),
-              },
-            ],
+            parts: contentParts,
           },
           config: {
             systemInstruction: isUltra ? SYSTEM_INSTRUCTION : FAST_SYSTEM_INSTRUCTION,
@@ -301,7 +357,6 @@ async function startServer() {
       } catch (primaryErr: any) {
         const status = primaryErr?.status || primaryErr?.code;
         if (status === 429 || status === 503) {
-          // Automatic fallback to high-quota model with reasoning when primary hits rate limit
           response = await callGeminiWithRetry(
             () =>
               callModel(
@@ -334,8 +389,10 @@ async function startServer() {
             dateNormalized: normalizeDateString(rawParsed.date || ''),
             dateConfidence: rawParsed.confidence || 'medium',
             calendarType: rawParsed.calendar || 'unknown',
+            title: rawParsed.title || '',
             recipient: rawParsed.recipient || '',
             subject: rawParsed.subject || '',
+            bodyContent: rawParsed.bodyContent || '',
           };
 
       res.json({ result: parsed });

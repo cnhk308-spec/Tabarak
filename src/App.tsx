@@ -15,6 +15,7 @@ import {
 } from './types';
 import {
   TOP_RIGHT_BOX,
+  compressImageDataUrl,
   convertToEasternDigits,
   convertToWesternDigits,
   cropRegionDataUrl,
@@ -55,7 +56,7 @@ export default function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [precisionMode, setPrecisionMode] = useState<PrecisionMode>('standard');
-  const [scanRegion, setScanRegion] = useState<ScanRegion>('top-right');
+  const [scanRegion, setScanRegion] = useState<ScanRegion>('full');
   const [digitPreference, setDigitPreference] = useState<DigitPreference>('western');
   const [hintText, setHintText] = useState<string>('');
   const [enhanceContrast, setEnhanceContrast] = useState<boolean>(false);
@@ -95,6 +96,7 @@ export default function App() {
         const effectiveRegion = options?.regionOverride ?? scanRegion;
         let payloadDataUrl = imageDataUrl;
         let resolvedMimeType = mimeType;
+        let headerImageBase64: string | undefined;
         let isCropped = Boolean(options?.isCroppedRegion);
         let originBox = options?.cropOriginBox;
 
@@ -108,10 +110,27 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
           isCropped = true;
           originBox = TOP_RIGHT_BOX;
+        } else if (!isCropped && effectiveRegion === 'full') {
+          // Send compressed full page + zoomed crisp top-right crop for handwriting accuracy
+          const [compressedFull, zoomedHeader] = await Promise.all([
+            compressImageDataUrl(imageDataUrl, 1250, 0.85),
+            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              maxDim: 950,
+              format: 'image/jpeg',
+              quality: 0.92,
+              contrastFilter: false,
+            }),
+          ]);
+          payloadDataUrl = compressedFull;
+          resolvedMimeType = 'image/jpeg';
+          headerImageBase64 = zoomedHeader;
         }
 
         if (options?.applyContrast) {
           payloadDataUrl = await enhanceInkContrastDataUrl(payloadDataUrl);
+          if (headerImageBase64) {
+            headerImageBase64 = await enhanceInkContrastDataUrl(headerImageBase64);
+          }
           resolvedMimeType = 'image/jpeg';
         }
 
@@ -121,6 +140,8 @@ export default function App() {
           body: JSON.stringify({
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
+            headerImageBase64,
+            headerMimeType: headerImageBase64 ? 'image/jpeg' : undefined,
             precisionMode: mode,
             isCroppedRegion: isCropped,
             hintText,
@@ -166,8 +187,10 @@ export default function App() {
                 digitPreference
               ),
               editedIssuingEntity: result.issuingEntity || '',
+              editedTitle: result.title || '',
               editedRecipient: result.recipient || '',
               editedSubject: result.subject || '',
+              editedBodyContent: result.bodyContent || '',
               userVerified: false,
             };
           })
@@ -214,8 +237,10 @@ export default function App() {
             editedIssueNumber: '',
             editedDate: '',
             editedIssuingEntity: '',
+            editedTitle: '',
             editedRecipient: '',
             editedSubject: '',
+            editedBodyContent: '',
             userVerified: false,
           };
 
@@ -343,7 +368,14 @@ export default function App() {
 
   const handleUpdateField = (
     id: string,
-    field: 'editedIssueNumber' | 'editedDate' | 'editedIssuingEntity' | 'editedRecipient' | 'editedSubject',
+    field:
+      | 'editedIssueNumber'
+      | 'editedDate'
+      | 'editedIssuingEntity'
+      | 'editedTitle'
+      | 'editedRecipient'
+      | 'editedSubject'
+      | 'editedBodyContent',
     value: string
   ) => {
     setDocuments((prev) =>
