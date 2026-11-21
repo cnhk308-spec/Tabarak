@@ -53,6 +53,7 @@ export interface DocumentItem {
   status: DocumentStatus;
   precisionMode: PrecisionMode;
   extractionDurationMs?: number;
+  isBodyLoading?: boolean;
   errorMessage?: string;
   result?: ExtractionResult;
   editedIssueNumber: string;

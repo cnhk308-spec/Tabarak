@@ -451,6 +451,12 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
 
               {/* Title / Recipient / Subject / Body Section */}
               <div className="space-y-3 border-t border-slate-200 pt-4">
+                {documentItem.isBodyLoading && (
+                  <div className="flex items-center gap-2 text-xs text-blue-900">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden="true" />
+                    <span>جاري استخراج مضمون الكتاب وتفاصيله...</span>
+                  </div>
+                )}
                 <div>
                   <label
                     htmlFor="field-title"

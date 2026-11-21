@@ -19,6 +19,21 @@ interface ExtractRequestBody {
   hintText?: string;
 }
 
+interface ExtractHeaderRequestBody {
+  headerImageBase64?: string;
+  headerMimeType?: string;
+  fullImageBase64?: string;
+  fullMimeType?: string;
+  precisionMode?: PrecisionMode;
+  hintText?: string;
+}
+
+interface ExtractBodyRequestBody {
+  imageBase64?: string;
+  mimeType?: string;
+  hintText?: string;
+}
+
 const boxSchema = {
   type: Type.OBJECT,
   properties: {
@@ -35,41 +50,35 @@ const headerHandwritingSchema = {
   properties: {
     headerFound: {
       type: Type.BOOLEAN,
-      description: 'true إذا ظهر حقل العدد أو التاريخ في هذه الصورة، وإلا false.',
+      description: 'true إذا ظهر العدد أو التاريخ في الصورة، وإلا false.',
     },
-    digitStrokesLeftToRight: {
+    digits: {
       type: Type.ARRAY,
       description:
-        'افحص خط اليد في حقل (العدد :) بدقة متناهية خانةً بخانة من أقصى اليسار إلى أقصى اليمين حتى تلامس النقطتين (:). لا تتخطَّ أي رقم وسطي (مثل ٨ أو ٠) ولا تسقط أي رقم طرفي ملاصق لـ (:).',
+        'امسح كل خانة في حقل (العدد :) من أقصى اليسار إلى أقصى اليمين حتى تلامس النقطتين (:). لا تتخطَّ أي رقم وسطي ولا تسقط الرقم الملاصق لـ (:).',
       items: {
         type: Type.OBJECT,
         properties: {
-          char: {
+          c: {
             type: Type.STRING,
-            description: 'الرقم أو الحرف أو الشرطة المائلة الواحدة فقط في هذه الخانة.',
+            description: 'الرقم أو الحرف أو الشرطة الواحدة فقط.',
           },
-          visualShape: {
+          k: {
             type: Type.STRING,
             description:
-              'وصف موجز لضربة القلم الظاهرة (مثلاً: دائرة ٥، نقطة ٠، ثمانية مفتوحة للأسفل ∧، ستة معقوفة لليسار ┐، سبعة ∨).',
+              'وسم الشكل بكلمة واحدة: حلقة|نقطة|∧|∨|┐|┌|تعرج|أسنان|ذيل|عمود|شرطة|حرف|غربي',
           },
         },
-        required: ['char', 'visualShape'],
+        required: ['c', 'k'],
       },
     },
-    colonEdgeCheck: {
+    beforeColon: {
       type: Type.STRING,
-      description:
-        'تحقق بصري نهائي: اذكر الرقم الملاصق تماماً ليسار النقطتين (:)، وتأكد من عدم سقوط أي رقم بين الخانات.',
+      description: 'الرقم أو الحرف الملاصق تماماً ليسار النقطتين (:) في حقل العدد.',
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description:
-        'العدد الكامل مطابقاً تماماً لتسلسل char في digitStrokesLeftToRight بدون حذف أو دمج أي خانة.',
-    },
-    issueNumberNormalized: {
-      type: Type.STRING,
-      description: 'العدد بأرقام إنجليزية (0123456789) مع الحفاظ على الحروف والشرطات المائلة.',
+      description: 'العدد كاملاً مطابقاً تماماً لدمج c في digits بدون حذف أي خانة.',
     },
     issueNumberConfidence: {
       type: Type.STRING,
@@ -77,23 +86,15 @@ const headerHandwritingSchema = {
     },
     alternativeIssueNumber: {
       type: Type.STRING,
-      description: 'قراءة بديلة محتملة في حال الشك في ضربة قلم، وإلا سلسلة فارغة.',
+      description: 'قراءة بديلة فقط عند الشك، وإلا سلسلة فارغة.',
     },
     issueNumberBox: {
       ...boxSchema,
-      description: 'إحداثيات مربع الإحاطة لقيمة العدد المكتوبة (0 إلى 1000).',
-    },
-    dateStrokesSummary: {
-      type: Type.STRING,
-      description: 'وصف موجز لضربات القلم في حقل (التاريخ :) من اليسار لليمين.',
+      description: 'مربع الإحاطة لقيمة العدد المكتوبة (0 إلى 1000).',
     },
     dateRaw: {
       type: Type.STRING,
-      description: 'التاريخ كما هو مكتوب بالضبط بخط اليد.',
-    },
-    dateNormalized: {
-      type: Type.STRING,
-      description: 'التاريخ بصيغة YYYY/MM/DD بأرقام إنجليزية.',
+      description: 'التاريخ كما كُتب بخط اليد بالضبط.',
     },
     dateConfidence: {
       type: Type.STRING,
@@ -101,7 +102,7 @@ const headerHandwritingSchema = {
     },
     alternativeDate: {
       type: Type.STRING,
-      description: 'قراءة بديلة للتاريخ، وإلا سلسلة فارغة.',
+      description: 'قراءة بديلة للتاريخ عند الشك، وإلا سلسلة فارغة.',
     },
     calendarType: {
       type: Type.STRING,
@@ -109,24 +110,21 @@ const headerHandwritingSchema = {
     },
     dateBox: {
       ...boxSchema,
-      description: 'إحداثيات مربع الإحاطة لقيمة التاريخ المكتوبة (0 إلى 1000).',
+      description: 'مربع الإحاطة لقيمة التاريخ المكتوبة (0 إلى 1000).',
     },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
-      description: 'هل العدد أو التاريخ مكتوبان بخط اليد.',
+      description: 'هل العدد أو التاريخ بخط اليد.',
     },
   },
   required: [
     'headerFound',
-    'digitStrokesLeftToRight',
-    'colonEdgeCheck',
+    'digits',
+    'beforeColon',
     'issueNumberRaw',
-    'issueNumberNormalized',
     'issueNumberConfidence',
     'issueNumberBox',
-    'dateStrokesSummary',
     'dateRaw',
-    'dateNormalized',
     'dateConfidence',
     'dateBox',
     'calendarType',
@@ -161,24 +159,22 @@ const documentBodySchema = {
   required: ['issuingEntity', 'title', 'recipient', 'subject', 'bodyContent'],
 };
 
-const HANDWRITING_RULES = `قواعد تفصيلية صارمة لقراءة الأرقام المكتوبة بخط اليد:
-1. ركّز على كل ضربة حبر قلمية في سطر (العدد :) وسطر (التاريخ :) وتجاهل أرقام الهواتف أو رموز النماذج.
-2. امسح الحبر المكتوب في حقل (العدد :) ببطء من اليسار إلى اليمين خانةً بخانة داخل digitStrokesLeftToRight، وصف شكل كل رقم على حدة:
-   - لا تقفز فوق رقم وسطي (مثلاً: في ٥٠٨٦ توجد 4 خانات متميزة: [٥ دائرة] ثم [٠ نقطة] ثم [٨ مثلث مفتوح للأسفل ∧] ثم [٦ معقوفة لليسار وملاصقة للنقطتين :]).
-   - لا تسقط الرقم الأخير على اليمين الملاصق للنقطتين (:) ولا تدمج رقمين متجاورين في رقم واحد!
-3. تمييز الأشكال اليدوية الهندية (٠١٢٣٤٥٦٧٨٩):
-   - (٠): نقطة حبر واضحة أو دائرة صغيرة جداً بين الأرقام.
-   - (٥): حلقة مغلقة أو شكل قلب أكبر وأوضح من نقطة (٠).
-   - (٨): شكل مثلث/ثنية مفتوح للأسفل (∧)، و(٧): مفتوح للأعلى (∨). انتبه جداً لـ (٨) بين (٠) و(٦) أو (٨) بجانب (٥)!
-   - (٦): رأسه/خطه العلوي يتجه لليسار ثم ينزل عمودياً (┐)، بينما (٢): يتجه رأسه لليمين ثم ينزل (┌).
-   - (٤): تعرّج مزدوج يتجه لليمين؛ (٣): ثلاث أسنان علوية؛ (٩): حلقة علوية مع ذيل؛ (١): خط عمودي مفرد (يختلف عن الشرطة المائلة الفاصلة /).
-4. للأرقام الغربية اليدوية (0123456789): ميّز بدقة بين 0 و5 و6 و8 و9 و2 و7.
-5. انقل الخانات من digitStrokesLeftToRight إلى issueNumberRaw كاملة بالترتيب دون إسقاط أي خانة.`;
+const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :):
+1. ركّز فقط على حبر خط اليد بجانب (العدد :) و(التاريخ :) وتجاهل أرقام الهواتف والرموز المطبوعة.
+2. امسح حقل (العدد :) من اليسار لليمين خانةً بخانة داخل digits، ولا تقفز فوق أي رقم وسطي (مثل ٨ أو ٠) ولا تسقط الرقم الملاصق لـ (:) (تحقق منه في beforeColon).
+   مثال: ٥٠٨٦ يتكون من 4 ضربات متميزة: [٥ حلقة] + [٠ نقطة] + [٨ مفتوحة للأسفل ∧] + [٦ معقوفة لليسار ┐ ملاصقة لـ :].
+3. تمييز الأرقام الهندية:
+   - (٠) نقطة حبر واضحة؛ (٥) حلقة مغلقة/قلب أكبر؛
+   - (٨) مفتوحة للأسفل ∧؛ (٧) مفتوحة للأعلى ∨؛
+   - (٦) رأسها يتجه لليسار ┐؛ (٢) رأسها يتجه لليمين ┌؛
+   - (٤) تعرّج لليمين؛ (٣) ثلاث أسنان؛ (٩) حلقة وذيل؛ (١) عمودي مفرد.
+4. للأرقام الغربية (0-9): ميّز بدقة بين 0 و5 و6 و8 و9 و2 و7.
+5. انقل جميع خانات digits كاملة إلى issueNumberRaw دون إسقاط أي خانة.`;
 
-const HEADER_OCR_INSTRUCTION = `أنت مدقق بصري متخصص حصرياً في تحليل وقراءة خط اليد في حقلَي (العدد) و(التاريخ) للكتب الرسمية العربية.
+const HEADER_OCR_INSTRUCTION = `أنت مدقق بصري متخصص حصرياً في قراءة خط اليد بدقة شديدة في حقلَي (العدد) و(التاريخ).
 ${HANDWRITING_RULES}`;
 
-const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بدقة.`;
+const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بإيجاز ودقة.`;
 
 function toWesternDigits(str: string): string {
   const eastern = '٠١٢٣٤٥٦٧٨٩';
@@ -188,13 +184,17 @@ function toWesternDigits(str: string): string {
     .replace(/[۰-۹]/g, (d) => String(persian.indexOf(d)));
 }
 
-function resolveIssueNumber(rawIssue: string, strokes?: unknown): string {
+function resolveIssueNumber(rawIssue: string, digits?: unknown): string {
   const cleanRaw = (rawIssue || '').trim();
-  if (!Array.isArray(strokes) || strokes.length === 0) return cleanRaw;
+  if (!Array.isArray(digits) || digits.length === 0) return cleanRaw;
 
-  const chars = strokes
+  const chars = digits
     .map((item) => {
       if (typeof item === 'string') return item.trim();
+      if (item && typeof item === 'object' && 'c' in item) {
+        const ch = (item as { c?: unknown }).c;
+        return typeof ch === 'string' ? ch.trim() : '';
+      }
       if (item && typeof item === 'object' && 'char' in item) {
         const ch = (item as { char?: unknown }).char;
         return typeof ch === 'string' ? ch.trim() : '';
@@ -244,7 +244,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T
       if (!isTransient || attempt === maxRetries) {
         throw err;
       }
-      const delayMs = 500 * Math.pow(2, attempt);
+      const delayMs = 450 * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -266,6 +266,10 @@ function getAiClient(): GoogleGenAI {
   });
 }
 
+function stripDataUrlPrefix(input: string): string {
+  return input.includes(',') ? input.split(',')[1] : input;
+}
+
 async function runHeaderHandwritingOcr(
   ai: GoogleGenAI,
   imageBase64: string,
@@ -284,7 +288,7 @@ async function runHeaderHandwritingOcr(
       },
     },
     {
-      text: `ركز بالتفصيل على قراءة خط اليد في حقل (العدد :) وحقل (التاريخ :). صف كل خانة وضربة قلم من اليسار لليمين داخل digitStrokesLeftToRight دون تخطي أي رقم وسطي أو رقم ملاصق للنقطتين (:).${hintLine}`,
+      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) بخط اليد بدقة شديدة. سجّل كل خانة من اليسار لليمين في digits وتحقق من الرقم الملاصق للنقطتين (:) في beforeColon.${hintLine}`,
     },
   ];
 
@@ -352,25 +356,159 @@ async function runBodyOcr(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: 'gemini-3.1-flash-lite',
       contents: { parts },
       config: {
         systemInstruction: BODY_OCR_INSTRUCTION,
         responseMimeType: 'application/json',
         responseSchema: documentBodySchema,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       },
     });
     const rawText = (response.text ?? '').trim();
     return rawText ? JSON.parse(rawText) : {};
   } catch {
-    return {};
+    try {
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: { parts },
+        config: {
+          systemInstruction: BODY_OCR_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: documentBodySchema,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      });
+      const fallbackText = (fallbackResponse.text ?? '').trim();
+      return fallbackText ? JSON.parse(fallbackText) : {};
+    } catch {
+      return {};
+    }
   }
+}
+
+function buildHeaderPayload(
+  headerResult: Record<string, any>,
+  boxReferenceImage: 'header_crop' | 'full_image'
+) {
+  const issueRaw = resolveIssueNumber(
+    headerResult.issueNumberRaw || '',
+    headerResult.digits
+  );
+  const dateRaw = headerResult.dateRaw || '';
+
+  return {
+    issueNumberRaw: issueRaw,
+    issueNumberNormalized: toWesternDigits(issueRaw),
+    issueNumberConfidence: headerResult.issueNumberConfidence || 'medium',
+    alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
+    issueNumberBox: headerResult.issueNumberBox || null,
+    dateRaw,
+    dateNormalized: normalizeDateString(dateRaw),
+    dateConfidence: headerResult.dateConfidence || 'medium',
+    alternativeDate: headerResult.alternativeDate || '',
+    dateBox: headerResult.dateBox || null,
+    boxReferenceImage,
+    calendarType: headerResult.calendarType || 'unknown',
+    isHandwrittenDetected: Boolean(headerResult.isHandwrittenDetected),
+  };
+}
+
+function handleApiError(res: express.Response, err: unknown) {
+  const errObj = err as { status?: number; code?: number; message?: string };
+  const status = errObj?.status || errObj?.code;
+  if (status === 429 || status === 503) {
+    res.status(429).json({
+      error: 'تم تجاوز حد الطلبات المؤقت. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.',
+    });
+    return;
+  }
+  res.status(500).json({
+    error: errObj?.message || 'حدث خطأ أثناء تحليل صورة الكتاب.',
+  });
 }
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
+
+  app.post('/api/extract-header', async (req, res) => {
+    try {
+      const body = (req.body || {}) as ExtractHeaderRequestBody;
+      if (!body.headerImageBase64 || typeof body.headerImageBase64 !== 'string') {
+        res.status(400).json({ error: 'بيانات صورة الترويسة غير صالحة أو مفقودة.' });
+        return;
+      }
+
+      const ai = getAiClient();
+      const cleanHeaderBase64 = stripDataUrlPrefix(body.headerImageBase64);
+      const headerMimeType = body.headerMimeType || 'image/jpeg';
+      const precisionMode: PrecisionMode =
+        body.precisionMode === 'ultra' ? 'ultra' : 'standard';
+      const hintLine =
+        body.hintText && body.hintText.trim().length > 0
+          ? ` تلميح: ${body.hintText.trim()}`
+          : '';
+
+      let headerResult = await runHeaderHandwritingOcr(
+        ai,
+        cleanHeaderBase64,
+        headerMimeType,
+        precisionMode,
+        hintLine
+      );
+      let boxReferenceImage: 'header_crop' | 'full_image' = 'header_crop';
+
+      if (
+        body.fullImageBase64 &&
+        (!headerResult.headerFound ||
+          (!headerResult.issueNumberRaw?.trim() && !headerResult.dateRaw?.trim()))
+      ) {
+        headerResult = await runHeaderHandwritingOcr(
+          ai,
+          stripDataUrlPrefix(body.fullImageBase64),
+          body.fullMimeType || 'image/jpeg',
+          precisionMode,
+          hintLine
+        );
+        boxReferenceImage = 'full_image';
+      }
+
+      res.json({ result: buildHeaderPayload(headerResult, boxReferenceImage) });
+    } catch (err: unknown) {
+      handleApiError(res, err);
+    }
+  });
+
+  app.post('/api/extract-body', async (req, res) => {
+    try {
+      const body = (req.body || {}) as ExtractBodyRequestBody;
+      if (!body.imageBase64 || typeof body.imageBase64 !== 'string') {
+        res.status(400).json({ error: 'بيانات الصورة غير صالحة أو مفقودة.' });
+        return;
+      }
+
+      const ai = getAiClient();
+      const cleanFullBase64 = stripDataUrlPrefix(body.imageBase64);
+      const fullMimeType = body.mimeType || 'image/jpeg';
+      const hintLine =
+        body.hintText && body.hintText.trim().length > 0
+          ? ` تلميح: ${body.hintText.trim()}`
+          : '';
+
+      const bodyResult = await runBodyOcr(ai, cleanFullBase64, fullMimeType, hintLine);
+      res.json({
+        result: {
+          issuingEntity: bodyResult.issuingEntity || '',
+          title: bodyResult.title || '',
+          recipient: bodyResult.recipient || '',
+          subject: bodyResult.subject || '',
+          bodyContent: bodyResult.bodyContent || '',
+        },
+      });
+    } catch (err: unknown) {
+      handleApiError(res, err);
+    }
+  });
 
   app.post('/api/extract', async (req, res) => {
     try {
@@ -381,17 +519,11 @@ async function startServer() {
       }
 
       const ai = getAiClient();
-
-      const cleanFullBase64 = body.imageBase64.includes(',')
-        ? body.imageBase64.split(',')[1]
-        : body.imageBase64;
+      const cleanFullBase64 = stripDataUrlPrefix(body.imageBase64);
       const fullMimeType = body.mimeType || 'image/jpeg';
-
       const cleanHeaderBase64 =
         body.headerImageBase64 && typeof body.headerImageBase64 === 'string'
-          ? body.headerImageBase64.includes(',')
-            ? body.headerImageBase64.split(',')[1]
-            : body.headerImageBase64
+          ? stripDataUrlPrefix(body.headerImageBase64)
           : null;
       const headerMimeType = body.headerMimeType || 'image/jpeg';
 
@@ -431,34 +563,14 @@ async function startServer() {
           boxReferenceImage = 'full_image';
         }
 
-        const issueRaw = resolveIssueNumber(
-          headerResult.issueNumberRaw || '',
-          headerResult.digitStrokesLeftToRight
-        );
-        const dateRaw = headerResult.dateRaw || '';
-
         res.json({
           result: {
-            issueNumberRaw: issueRaw,
-            issueNumberNormalized: toWesternDigits(issueRaw),
-            issueNumberConfidence: headerResult.issueNumberConfidence || 'medium',
-            alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
-            issueNumberBox: headerResult.issueNumberBox || null,
-            dateRaw,
-            dateNormalized: normalizeDateString(
-              headerResult.dateNormalized || dateRaw
-            ),
-            dateConfidence: headerResult.dateConfidence || 'medium',
-            alternativeDate: headerResult.alternativeDate || '',
-            dateBox: headerResult.dateBox || null,
-            boxReferenceImage,
-            calendarType: headerResult.calendarType || 'unknown',
+            ...buildHeaderPayload(headerResult, boxReferenceImage),
             issuingEntity: bodyResult.issuingEntity || '',
             title: bodyResult.title || '',
             recipient: bodyResult.recipient || '',
             subject: bodyResult.subject || '',
             bodyContent: bodyResult.bodyContent || '',
-            isHandwrittenDetected: Boolean(headerResult.isHandwrittenDetected),
           },
         });
         return;
@@ -471,45 +583,19 @@ async function startServer() {
         precisionMode,
         hintLine
       );
-      const issueRaw = resolveIssueNumber(
-        headerResult.issueNumberRaw || '',
-        headerResult.digitStrokesLeftToRight
-      );
-      const dateRaw = headerResult.dateRaw || '';
 
       res.json({
         result: {
-          issueNumberRaw: issueRaw,
-          issueNumberNormalized: toWesternDigits(issueRaw),
-          issueNumberConfidence: headerResult.issueNumberConfidence || 'medium',
-          alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
-          issueNumberBox: headerResult.issueNumberBox || null,
-          dateRaw,
-          dateNormalized: normalizeDateString(headerResult.dateNormalized || dateRaw),
-          dateConfidence: headerResult.dateConfidence || 'medium',
-          alternativeDate: headerResult.alternativeDate || '',
-          dateBox: headerResult.dateBox || null,
-          boxReferenceImage: 'header_crop',
-          calendarType: headerResult.calendarType || 'unknown',
+          ...buildHeaderPayload(headerResult, 'header_crop'),
+          issuingEntity: '',
           title: '',
           recipient: '',
           subject: '',
           bodyContent: '',
-          isHandwrittenDetected: Boolean(headerResult.isHandwrittenDetected),
         },
       });
     } catch (err: unknown) {
-      const errObj = err as { status?: number; code?: number; message?: string };
-      const status = errObj?.status || errObj?.code;
-      if (status === 429 || status === 503) {
-        res.status(429).json({
-          error: 'تم تجاوز حد الطلبات المؤقت. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.',
-        });
-        return;
-      }
-      res.status(500).json({
-        error: errObj?.message || 'حدث خطأ أثناء تحليل صورة الكتاب.',
-      });
+      handleApiError(res, err);
     }
   });
 

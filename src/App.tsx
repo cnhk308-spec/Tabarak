@@ -7,7 +7,8 @@ import { LedgerTableView } from './components/LedgerTableView';
 import { AccuracyGuideView } from './components/AccuracyGuideView';
 import { GeminiKeyButton } from './components/GeminiKeyButton';
 import {
-  extractDocumentWithGemini,
+  extractDocumentProgressive,
+  extractHeaderOnlyWithGemini,
   getStoredGeminiApiKey,
   setStoredGeminiApiKey,
 } from './services/geminiExtractor';
@@ -26,6 +27,7 @@ import {
   convertToWesternDigits,
   cropRegionDataUrl,
   enhanceInkContrastDataUrl,
+  expandBoundingBox,
   generateSampleOfficialLetterFile,
   loadImageFile,
   rotateImageDataUrl,
@@ -82,6 +84,7 @@ export default function App() {
   const [apiKey, setApiKey] = useState<string>(() => getStoredGeminiApiKey());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeRunTokensRef = useRef<Record<string, number>>({});
 
   const activeDocument = useMemo(
     () => documents.find((d) => d.id === activeId) ?? null,
@@ -101,10 +104,20 @@ export default function App() {
         regionOverride?: ScanRegion;
       }
     ) => {
+      const runToken = (activeRunTokensRef.current[docId] || 0) + 1;
+      activeRunTokensRef.current[docId] = runToken;
+      const isStale = () => activeRunTokensRef.current[docId] !== runToken;
+
       setDocuments((prev) =>
         prev.map((d) =>
           d.id === docId
-            ? { ...d, status: 'processing', precisionMode: mode, errorMessage: undefined }
+            ? {
+                ...d,
+                status: 'processing',
+                isBodyLoading: false,
+                precisionMode: mode,
+                errorMessage: undefined,
+              }
             : d
         )
       );
@@ -122,10 +135,10 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 1300,
-            maxDim: 1600,
+            minDim: 800,
+            maxDim: 1350,
             format: 'image/jpeg',
-            quality: 0.96,
+            quality: 0.92,
             contrastFilter: false,
           });
           resolvedMimeType = 'image/jpeg';
@@ -133,12 +146,12 @@ export default function App() {
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
           const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1000, 0.8),
+            compressImageDataUrl(imageDataUrl, 960, 0.76),
             cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              minDim: 1300,
-              maxDim: 1600,
+              minDim: 800,
+              maxDim: 1350,
               format: 'image/jpeg',
-              quality: 0.96,
+              quality: 0.92,
               contrastFilter: false,
             }),
           ]);
@@ -158,7 +171,32 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
         }
 
-        const result = await extractDocumentWithGemini(
+        const mapResultBoxes = (res: ExtractionResult): ExtractionResult => {
+          const boxOrigin =
+            isCropped && originBox
+              ? originBox
+              : headerBoxOrigin && res.boxReferenceImage !== 'full_image'
+              ? headerBoxOrigin
+              : null;
+
+          if (boxOrigin) {
+            return {
+              ...res,
+              issueNumberBox: mapCroppedBoxToFullImage(res.issueNumberBox, boxOrigin),
+              dateBox: mapCroppedBoxToFullImage(res.dateBox, boxOrigin),
+            };
+          }
+          return {
+            ...res,
+            issueNumberBox: clampValidBox(res.issueNumberBox),
+            dateBox: clampValidBox(res.dateBox),
+          };
+        };
+
+        const expectsBody = effectiveRegion === 'full' && !isCropped;
+        let ultraZoomPromise: Promise<void> | null = null;
+
+        const fullResult = await extractDocumentProgressive(
           {
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
@@ -168,66 +206,163 @@ export default function App() {
             isCroppedRegion: isCropped,
             hintText,
           },
-          apiKey
+          apiKey,
+          {
+            onHeaderReady: (rawHeaderResult) => {
+              if (isStale()) return;
+              const headerMapped = mapResultBoxes(rawHeaderResult);
+              const headerDurationMs = Math.round(performance.now() - startedAt);
+
+              setDocuments((prev) =>
+                prev.map((d) => {
+                  if (d.id !== docId) return d;
+                  return {
+                    ...d,
+                    status: 'extracted',
+                    isBodyLoading: expectsBody,
+                    extractionDurationMs: headerDurationMs,
+                    result: headerMapped,
+                    editedIssueNumber: formatExtractedValue(
+                      headerMapped.issueNumberRaw,
+                      headerMapped.issueNumberNormalized,
+                      digitPreference
+                    ),
+                    editedDate: formatExtractedValue(
+                      headerMapped.dateRaw,
+                      headerMapped.dateNormalized,
+                      digitPreference
+                    ),
+                    userVerified: false,
+                  };
+                })
+              );
+
+              if (mode === 'ultra' && !isCropped && headerMapped.issueNumberBox) {
+                const zoomBox = expandBoundingBox(
+                  headerMapped.issueNumberBox,
+                  85,
+                  110,
+                  40,
+                  40
+                );
+                ultraZoomPromise = (async () => {
+                  try {
+                    const zoomCrop = await cropRegionDataUrl(imageDataUrl, zoomBox, 0, {
+                      minDim: 750,
+                      maxDim: 1100,
+                      format: 'image/jpeg',
+                      quality: 0.94,
+                      contrastFilter: false,
+                    });
+                    const zoomRes = await extractHeaderOnlyWithGemini(
+                      {
+                        imageBase64: zoomCrop,
+                        mimeType: 'image/jpeg',
+                        precisionMode: 'ultra',
+                        hintText: hintText
+                          ? `${hintText} — تحقق بدقة شديدة من أرقام العدد المكبّرة`
+                          : 'تحقق بدقة شديدة من أرقام العدد المكبّرة',
+                      },
+                      apiKey
+                    );
+                    if (isStale()) return;
+                    const zoomedIssueRaw = (zoomRes.issueNumberRaw || '').trim();
+                    if (!zoomedIssueRaw) return;
+
+                    setDocuments((prev) =>
+                      prev.map((d) => {
+                        if (d.id !== docId || !d.result || d.userVerified) return d;
+                        const prevRaw = d.result.issueNumberRaw || '';
+                        const prevLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
+                        const zoomLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
+
+                        if (zoomLen < prevLen && d.result.issueNumberConfidence === 'high') {
+                          if (zoomedIssueRaw === prevRaw) return d;
+                          return {
+                            ...d,
+                            result: {
+                              ...d.result,
+                              alternativeIssueNumber: zoomedIssueRaw,
+                            },
+                          };
+                        }
+
+                        const nextAlt =
+                          zoomedIssueRaw !== prevRaw
+                            ? prevRaw
+                            : d.result.alternativeIssueNumber || '';
+                        const updatedResult: ExtractionResult = {
+                          ...d.result,
+                          issueNumberRaw: zoomedIssueRaw,
+                          issueNumberNormalized: zoomRes.issueNumberNormalized,
+                          issueNumberConfidence: zoomRes.issueNumberConfidence,
+                          alternativeIssueNumber: nextAlt,
+                        };
+                        return {
+                          ...d,
+                          result: updatedResult,
+                          editedIssueNumber: formatExtractedValue(
+                            updatedResult.issueNumberRaw,
+                            updatedResult.issueNumberNormalized,
+                            digitPreference
+                          ),
+                        };
+                      })
+                    );
+                  } catch {
+                    // Keep initial header reading if zoomed verification fails
+                  }
+                })();
+              }
+            },
+          }
         );
 
-        const boxOrigin =
-          isCropped && originBox
-            ? originBox
-            : headerBoxOrigin && result.boxReferenceImage !== 'full_image'
-            ? headerBoxOrigin
-            : null;
-
-        if (boxOrigin) {
-          result.issueNumberBox = mapCroppedBoxToFullImage(
-            result.issueNumberBox,
-            boxOrigin
-          );
-          result.dateBox = mapCroppedBoxToFullImage(
-            result.dateBox,
-            boxOrigin
-          );
-        } else {
-          result.issueNumberBox = clampValidBox(result.issueNumberBox);
-          result.dateBox = clampValidBox(result.dateBox);
+        if (isStale()) return;
+        const mappedFull = mapResultBoxes(fullResult);
+        if (ultraZoomPromise) {
+          await ultraZoomPromise;
         }
+        if (isStale()) return;
 
         const durationMs = Math.round(performance.now() - startedAt);
 
         setDocuments((prev) =>
           prev.map((d) => {
             if (d.id !== docId) return d;
+            const mergedResult: ExtractionResult = d.result
+              ? {
+                  ...d.result,
+                  issuingEntity: mappedFull.issuingEntity || '',
+                  title: mappedFull.title || '',
+                  recipient: mappedFull.recipient || '',
+                  subject: mappedFull.subject || '',
+                  bodyContent: mappedFull.bodyContent || '',
+                }
+              : mappedFull;
             return {
               ...d,
               status: 'extracted',
-              extractionDurationMs: durationMs,
-              result,
-              editedIssueNumber: formatExtractedValue(
-                result.issueNumberRaw,
-                result.issueNumberNormalized,
-                digitPreference
-              ),
-              editedDate: formatExtractedValue(
-                result.dateRaw,
-                result.dateNormalized,
-                digitPreference
-              ),
-              editedIssuingEntity: result.issuingEntity || '',
-              editedTitle: result.title || '',
-              editedRecipient: result.recipient || '',
-              editedSubject: result.subject || '',
-              editedBodyContent: result.bodyContent || '',
-              userVerified: false,
+              isBodyLoading: false,
+              extractionDurationMs: d.extractionDurationMs ?? durationMs,
+              result: mergedResult,
+              editedIssuingEntity: mergedResult.issuingEntity || '',
+              editedTitle: mergedResult.title || '',
+              editedRecipient: mergedResult.recipient || '',
+              editedSubject: mergedResult.subject || '',
+              editedBodyContent: mergedResult.bodyContent || '',
             };
           })
         );
       } catch (err: any) {
+        if (isStale()) return;
         setDocuments((prev) =>
           prev.map((d) =>
             d.id === docId
               ? {
                   ...d,
                   status: 'error',
+                  isBodyLoading: false,
                   errorMessage: err?.message || 'حدث خطأ أثناء تحليل الصورة.',
                 }
               : d

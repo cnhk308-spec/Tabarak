@@ -33,7 +33,7 @@ export async function loadImageFile(file: File): Promise<{
   });
 
   const img = await loadHtmlImage(rawDataUrl);
-  const maxDim = 2600;
+  const maxDim = 3400;
   let targetWidth = img.naturalWidth;
   let targetHeight = img.naturalHeight;
 
@@ -122,6 +122,21 @@ export const TOP_RIGHT_BOX: BoundingBox = {
   ymax: 470,
   xmax: 1000,
 };
+
+export function expandBoundingBox(
+  box: BoundingBox,
+  padLeft: number,
+  padRight: number,
+  padTop: number,
+  padBottom: number
+): BoundingBox {
+  return {
+    xmin: Math.max(0, Math.round(box.xmin - padLeft)),
+    xmax: Math.min(1000, Math.round(box.xmax + padRight)),
+    ymin: Math.max(0, Math.round(box.ymin - padTop)),
+    ymax: Math.min(1000, Math.round(box.ymax + padBottom)),
+  };
+}
 
 export async function enhanceHandwritingCropDataUrl(dataUrl: string): Promise<string> {
   const img = await loadHtmlImage(dataUrl);
