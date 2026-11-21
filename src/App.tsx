@@ -34,11 +34,13 @@ import {
   saveDirectoryHandle,
 } from './utils/folderScanner';
 import {
+  TOP_HEADER_BOX,
   TOP_RIGHT_BOX,
   compressImageDataUrl,
   convertToEasternDigits,
   convertToWesternDigits,
   cropRegionDataUrl,
+  enhanceHandwritingCropDataUrl,
   enhanceInkContrastDataUrl,
   expandBoundingBox,
   generateSampleOfficialLetterFile,
@@ -81,6 +83,69 @@ function mapCroppedBoxToFullImage(
     ymin: cropBox.ymin + (valid.ymin / 1000) * cropH,
     ymax: cropBox.ymin + (valid.ymax / 1000) * cropH,
   });
+}
+
+function reconcileZoomedHeaderResult(
+  prev: ExtractionResult,
+  zoomIssue: ExtractionResult | null,
+  zoomDate: ExtractionResult | null
+): ExtractionResult {
+  let next: ExtractionResult = { ...prev };
+
+  const zoomedIssueRaw = (zoomIssue?.issueNumberRaw || '').trim();
+  if (zoomIssue && zoomedIssueRaw) {
+    const prevRaw = prev.issueNumberRaw || '';
+    if (zoomedIssueRaw !== prevRaw) {
+      if (
+        zoomIssue.issueNumberConfidence === 'low' &&
+        prev.issueNumberConfidence === 'high'
+      ) {
+        next.alternativeIssueNumber = zoomedIssueRaw;
+      } else {
+        next = {
+          ...next,
+          issueNumberRaw: zoomedIssueRaw,
+          issueNumberNormalized: zoomIssue.issueNumberNormalized,
+          issueNumberConfidence: zoomIssue.issueNumberConfidence,
+          alternativeIssueNumber: prevRaw || prev.alternativeIssueNumber || '',
+        };
+      }
+    } else if (zoomIssue.issueNumberConfidence === 'high') {
+      next.issueNumberConfidence = 'high';
+    }
+  }
+
+  const zoomedDateRaw = (zoomDate?.dateRaw || '').trim();
+  const zoomedDateNorm = (zoomDate?.dateNormalized || '').trim();
+  if (zoomDate && (zoomedDateRaw || zoomedDateNorm)) {
+    const prevRaw = prev.dateRaw || '';
+    const prevNorm = prev.dateNormalized || '';
+    const isDifferent =
+      (zoomedDateNorm && zoomedDateNorm !== prevNorm) ||
+      (zoomedDateRaw && zoomedDateRaw !== prevRaw);
+
+    if (isDifferent) {
+      if (zoomDate.dateConfidence === 'low' && prev.dateConfidence === 'high') {
+        next.alternativeDate = zoomedDateNorm || zoomedDateRaw;
+      } else {
+        next = {
+          ...next,
+          dateRaw: zoomedDateRaw || prevRaw,
+          dateNormalized: zoomedDateNorm || prevNorm,
+          dateConfidence: zoomDate.dateConfidence,
+          calendarType:
+            zoomDate.calendarType !== 'unknown'
+              ? zoomDate.calendarType
+              : prev.calendarType,
+          alternativeDate: prevNorm || prevRaw || prev.alternativeDate || '',
+        };
+      }
+    } else if (zoomDate.dateConfidence === 'high') {
+      next.dateConfidence = 'high';
+    }
+  }
+
+  return next;
 }
 
 export default function App() {
@@ -177,10 +242,10 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 700,
-            maxDim: 1150,
+            minDim: 950,
+            maxDim: 1550,
             format: 'image/jpeg',
-            quality: 0.88,
+            quality: 0.96,
             contrastFilter: false,
           });
           resolvedMimeType = 'image/jpeg';
@@ -188,12 +253,12 @@ export default function App() {
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
           const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 850, 0.7),
-            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              minDim: 700,
-              maxDim: 1150,
+            compressImageDataUrl(imageDataUrl, 900, 0.72),
+            cropRegionDataUrl(imageDataUrl, TOP_HEADER_BOX, 0, {
+              minDim: 1000,
+              maxDim: 1650,
               format: 'image/jpeg',
-              quality: 0.88,
+              quality: 0.96,
               contrastFilter: false,
             }),
           ]);
@@ -201,7 +266,7 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
           headerImageBase64 = headerJpeg;
           headerMimeType = 'image/jpeg';
-          headerBoxOrigin = TOP_RIGHT_BOX;
+          headerBoxOrigin = TOP_HEADER_BOX;
         }
 
         if (options?.applyContrast) {
@@ -296,105 +361,160 @@ export default function App() {
                 })
               );
 
-              if (mode === 'ultra' && !isCropped && headerMapped.issueNumberBox) {
-                const zoomBox = expandBoundingBox(
-                  headerMapped.issueNumberBox,
-                  85,
-                  110,
-                  40,
-                  40
-                );
+              const needsZoomVerify =
+                !isCropped &&
+                Boolean(headerMapped.issueNumberBox || headerMapped.dateBox) &&
+                (mode === 'ultra' ||
+                  Boolean(headerMapped.isHandwrittenDetected) ||
+                  headerMapped.issueNumberConfidence !== 'high' ||
+                  headerMapped.dateConfidence !== 'high');
+
+              if (needsZoomVerify) {
                 ultraZoomPromise = (async () => {
                   try {
-                    const zoomCrop = await cropRegionDataUrl(imageDataUrl, zoomBox, 0, {
-                      minDim: 750,
-                      maxDim: 1100,
-                      format: 'image/jpeg',
-                      quality: 0.94,
-                      contrastFilter: false,
-                    });
-                    const zoomRes = await extractHeaderOnlyWithGemini(
-                      {
-                        imageBase64: zoomCrop,
-                        mimeType: 'image/jpeg',
-                        precisionMode: 'ultra',
-                        hintText: hintText
-                          ? `${hintText} — تحقق بدقة شديدة من أرقام العدد المكبّرة`
-                          : 'تحقق بدقة شديدة من أرقام العدد المكبّرة',
-                      },
-                      apiKey
-                    );
+                    const ib = headerMapped.issueNumberBox;
+                    const db = headerMapped.dateBox;
+
+                    const cropAndEnhance = async (box: BoundingBox) => {
+                      const expanded = expandBoundingBox(box, 95, 115, 48, 48);
+                      const rawCrop = await cropRegionDataUrl(imageDataUrl, expanded, 0, {
+                        minDim: 1000,
+                        maxDim: 1600,
+                        format: 'image/png',
+                        contrastFilter: false,
+                      });
+                      return enhanceHandwritingCropDataUrl(rawCrop);
+                    };
+
+                    let zoomIssueRes: ExtractionResult | null = null;
+                    let zoomDateRes: ExtractionResult | null = null;
+
+                    if (ib && db) {
+                      const unionBox: BoundingBox = {
+                        xmin: Math.min(ib.xmin, db.xmin),
+                        ymin: Math.min(ib.ymin, db.ymin),
+                        xmax: Math.max(ib.xmax, db.xmax),
+                        ymax: Math.max(ib.ymax, db.ymax),
+                      };
+                      const unionCompact =
+                        unionBox.xmax - unionBox.xmin <= 700 &&
+                        unionBox.ymax - unionBox.ymin <= 380;
+
+                      if (unionCompact) {
+                        const enhancedStrip = await cropAndEnhance(unionBox);
+                        const combined = await extractHeaderOnlyWithGemini(
+                          {
+                            imageBase64: enhancedStrip,
+                            mimeType: 'image/png',
+                            precisionMode: 'ultra',
+                            hintText: hintText
+                              ? `${hintText} — هذه لقطة مكبّرة ومحسّنة التباين للعدد والتاريخ بخط اليد، دقق في الصفر ٠ والاتجاهات بين ٢ و٦ و٧ و٨`
+                              : 'هذه لقطة مكبّرة ومحسّنة التباين للعدد والتاريخ بخط اليد، دقق في الصفر ٠ والاتجاهات بين ٢ و٦ و٧ و٨',
+                          },
+                          apiKey
+                        );
+                        zoomIssueRes = combined;
+                        zoomDateRes = combined;
+                      } else {
+                        const [enhancedIssue, enhancedDate] = await Promise.all([
+                          cropAndEnhance(ib),
+                          cropAndEnhance(db),
+                        ]);
+                        const [issueOnly, dateOnly] = await Promise.all([
+                          extractHeaderOnlyWithGemini(
+                            {
+                              imageBase64: enhancedIssue,
+                              mimeType: 'image/png',
+                              precisionMode: 'ultra',
+                              hintText: hintText
+                                ? `${hintText} — لقطة مكبّرة لحقل العدد بخط اليد`
+                                : 'لقطة مكبّرة لحقل العدد بخط اليد',
+                            },
+                            apiKey
+                          ),
+                          extractHeaderOnlyWithGemini(
+                            {
+                              imageBase64: enhancedDate,
+                              mimeType: 'image/png',
+                              precisionMode: 'ultra',
+                              hintText: hintText
+                                ? `${hintText} — لقطة مكبّرة لحقل التاريخ بخط اليد`
+                                : 'لقطة مكبّرة لحقل التاريخ بخط اليد',
+                            },
+                            apiKey
+                          ),
+                        ]);
+                        zoomIssueRes = issueOnly;
+                        zoomDateRes = dateOnly;
+                      }
+                    } else if (ib) {
+                      const enhancedIssue = await cropAndEnhance(ib);
+                      zoomIssueRes = await extractHeaderOnlyWithGemini(
+                        {
+                          imageBase64: enhancedIssue,
+                          mimeType: 'image/png',
+                          precisionMode: 'ultra',
+                          hintText: hintText
+                            ? `${hintText} — لقطة مكبّرة لحقل العدد بخط اليد`
+                            : 'لقطة مكبّرة لحقل العدد بخط اليد',
+                        },
+                        apiKey
+                      );
+                    } else if (db) {
+                      const enhancedDate = await cropAndEnhance(db);
+                      zoomDateRes = await extractHeaderOnlyWithGemini(
+                        {
+                          imageBase64: enhancedDate,
+                          mimeType: 'image/png',
+                          precisionMode: 'ultra',
+                          hintText: hintText
+                            ? `${hintText} — لقطة مكبّرة لحقل التاريخ بخط اليد`
+                            : 'لقطة مكبّرة لحقل التاريخ بخط اليد',
+                        },
+                        apiKey
+                      );
+                    }
+
                     if (isStale()) return;
-                    const zoomedIssueRaw = (zoomRes.issueNumberRaw || '').trim();
-                    if (!zoomedIssueRaw) return;
 
                     if (tracker.headerResult) {
-                      const prevRaw = tracker.headerResult.issueNumberRaw || '';
-                      const prevLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
-                      const zoomLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
-
-                      if (zoomLen < prevLen && tracker.headerResult.issueNumberConfidence === 'high') {
-                        if (zoomedIssueRaw !== prevRaw) {
-                          tracker.headerResult = {
-                            ...tracker.headerResult,
-                            alternativeIssueNumber: zoomedIssueRaw,
-                          };
-                        }
-                      } else {
-                        const nextAlt =
-                          zoomedIssueRaw !== prevRaw
-                            ? prevRaw
-                            : tracker.headerResult.alternativeIssueNumber || '';
-                        tracker.headerResult = {
-                          ...tracker.headerResult,
-                          issueNumberRaw: zoomedIssueRaw,
-                          issueNumberNormalized: zoomRes.issueNumberNormalized,
-                          issueNumberConfidence: zoomRes.issueNumberConfidence,
-                          alternativeIssueNumber: nextAlt,
-                        };
-                        tracker.editedIssue = formatExtractedValue(
-                          tracker.headerResult.issueNumberRaw,
-                          tracker.headerResult.issueNumberNormalized,
-                          digitPreference
-                        );
-                      }
+                      const reconciled = reconcileZoomedHeaderResult(
+                        tracker.headerResult,
+                        zoomIssueRes,
+                        zoomDateRes
+                      );
+                      tracker.headerResult = reconciled;
+                      tracker.editedIssue = formatExtractedValue(
+                        reconciled.issueNumberRaw,
+                        reconciled.issueNumberNormalized,
+                        digitPreference
+                      );
+                      tracker.editedDate = formatExtractedValue(
+                        reconciled.dateRaw,
+                        reconciled.dateNormalized,
+                        digitPreference
+                      );
                     }
 
                     setDocuments((prev) =>
                       prev.map((d) => {
                         if (d.id !== docId || !d.result || d.userVerified) return d;
-                        const prevRaw = d.result.issueNumberRaw || '';
-                        const prevLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
-                        const zoomLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
-
-                        if (zoomLen < prevLen && d.result.issueNumberConfidence === 'high') {
-                          if (zoomedIssueRaw === prevRaw) return d;
-                          return {
-                            ...d,
-                            result: {
-                              ...d.result,
-                              alternativeIssueNumber: zoomedIssueRaw,
-                            },
-                          };
-                        }
-
-                        const nextAlt =
-                          zoomedIssueRaw !== prevRaw
-                            ? prevRaw
-                            : d.result.alternativeIssueNumber || '';
-                        const updatedResult: ExtractionResult = {
-                          ...d.result,
-                          issueNumberRaw: zoomedIssueRaw,
-                          issueNumberNormalized: zoomRes.issueNumberNormalized,
-                          issueNumberConfidence: zoomRes.issueNumberConfidence,
-                          alternativeIssueNumber: nextAlt,
-                        };
+                        const updatedResult = reconcileZoomedHeaderResult(
+                          d.result,
+                          zoomIssueRes,
+                          zoomDateRes
+                        );
                         return {
                           ...d,
                           result: updatedResult,
                           editedIssueNumber: formatExtractedValue(
                             updatedResult.issueNumberRaw,
                             updatedResult.issueNumberNormalized,
+                            digitPreference
+                          ),
+                          editedDate: formatExtractedValue(
+                            updatedResult.dateRaw,
+                            updatedResult.dateNormalized,
                             digitPreference
                           ),
                         };

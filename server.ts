@@ -55,18 +55,18 @@ const headerHandwritingSchema = {
     digits: {
       type: Type.ARRAY,
       description:
-        'امسح كل خانة في حقل (العدد :) من أقصى اليسار إلى أقصى اليمين حتى تلامس النقطتين (:). لا تتخطَّ أي رقم وسطي ولا تسقط الرقم الملاصق لـ (:).',
+        'تحليل خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). لا تسقط أي نقطة صفر (٠) أو رقم وسطي أو رقم ملاصق لـ (:).',
       items: {
         type: Type.OBJECT,
         properties: {
           c: {
             type: Type.STRING,
-            description: 'الرقم أو الحرف أو الشرطة الواحدة فقط.',
+            description: 'الرقم أو الحرف أو الشرطة المائلة الواحدة.',
           },
           k: {
             type: Type.STRING,
             description:
-              'وسم الشكل بكلمة واحدة: حلقة|نقطة|∧|∨|┐|┌|تعرج|أسنان|ذيل|عمود|شرطة|حرف|غربي',
+              'وصف شكل الضربة بإيجاز (مثل: نقطة، حلقة، رأس لليمين، رأس لليسار، للأعلى، للأسفل، ذيل، تعرج، شرطة، حرف).',
           },
         },
         required: ['c', 'k'],
@@ -78,7 +78,7 @@ const headerHandwritingSchema = {
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description: 'العدد كاملاً مطابقاً تماماً لدمج c في digits بدون حذف أي خانة.',
+      description: 'العدد كاملاً كما كُتب بخط اليد بجانب (العدد :) دون حذف أي خانة أو بادئة.',
     },
     issueNumberConfidence: {
       type: Type.STRING,
@@ -86,15 +86,32 @@ const headerHandwritingSchema = {
     },
     alternativeIssueNumber: {
       type: Type.STRING,
-      description: 'قراءة بديلة فقط عند الشك، وإلا سلسلة فارغة.',
+      description: 'قراءة بديلة فقط عند وجود احتمال آخر، وإلا سلسلة فارغة.',
     },
     issueNumberBox: {
       ...boxSchema,
-      description: 'مربع الإحاطة لقيمة العدد المكتوبة (0 إلى 1000).',
+      description: 'مربع الإحاطة لقيمة العدد المكتوبة فقط (0 إلى 1000).',
+    },
+    dateObservation: {
+      type: Type.STRING,
+      description:
+        'ملاحظة بصرية قصيرة عن خانات التاريخ: اليوم، الشهر، السنة، وهل بعض أرقام السنة مطبوع مثل (٢٠٢) والباقي بخط اليد.',
+    },
+    dateDay: {
+      type: Type.STRING,
+      description: 'رقم اليوم في التاريخ كما ظهر (1-31 أو بالأرقام الهندية).',
+    },
+    dateMonth: {
+      type: Type.STRING,
+      description: 'رقم الشهر في التاريخ كما ظهر (1-12 أو بالأرقام الهندية).',
+    },
+    dateYear: {
+      type: Type.STRING,
+      description: 'السنة كاملة (4 أرقام مثل ٢٠٢٦ أو 2026، أو رقمين إذا كُتبت مختصرة).',
     },
     dateRaw: {
       type: Type.STRING,
-      description: 'التاريخ كما كُتب بخط اليد بالضبط.',
+      description: 'التاريخ كاملاً كما كُتب بالصيغة الظاهرة (مثل ٢٧/١٠/٢٠٢٦ أو ٢٠٢٦/١٠/٢٧).',
     },
     dateConfidence: {
       type: Type.STRING,
@@ -110,11 +127,11 @@ const headerHandwritingSchema = {
     },
     dateBox: {
       ...boxSchema,
-      description: 'مربع الإحاطة لقيمة التاريخ المكتوبة (0 إلى 1000).',
+      description: 'مربع الإحاطة لقيمة التاريخ المكتوبة فقط (0 إلى 1000).',
     },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
-      description: 'هل العدد أو التاريخ بخط اليد.',
+      description: 'هل العدد أو التاريخ مكتوب بخط اليد.',
     },
   },
   required: [
@@ -124,6 +141,10 @@ const headerHandwritingSchema = {
     'issueNumberRaw',
     'issueNumberConfidence',
     'issueNumberBox',
+    'dateObservation',
+    'dateDay',
+    'dateMonth',
+    'dateYear',
     'dateRaw',
     'dateConfidence',
     'dateBox',
@@ -159,19 +180,25 @@ const documentBodySchema = {
   required: ['issuingEntity', 'title', 'recipient', 'subject', 'bodyContent'],
 };
 
-const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :):
-1. ركّز فقط على حبر خط اليد بجانب (العدد :) و(التاريخ :) وتجاهل أرقام الهواتف والرموز المطبوعة.
-2. امسح حقل (العدد :) من اليسار لليمين خانةً بخانة داخل digits، ولا تقفز فوق أي رقم وسطي (مثل ٨ أو ٠) ولا تسقط الرقم الملاصق لـ (:) (تحقق منه في beforeColon).
-   مثال: ٥٠٨٦ يتكون من 4 ضربات متميزة: [٥ حلقة] + [٠ نقطة] + [٨ مفتوحة للأسفل ∧] + [٦ معقوفة لليسار ┐ ملاصقة لـ :].
-3. تمييز الأرقام الهندية:
-   - (٠) نقطة حبر واضحة؛ (٥) حلقة مغلقة/قلب أكبر؛
-   - (٨) مفتوحة للأسفل ∧؛ (٧) مفتوحة للأعلى ∨؛
-   - (٦) رأسها يتجه لليسار ┐؛ (٢) رأسها يتجه لليمين ┌؛
-   - (٤) تعرّج لليمين؛ (٣) ثلاث أسنان؛ (٩) حلقة وذيل؛ (١) عمودي مفرد.
-4. للأرقام الغربية (0-9): ميّز بدقة بين 0 و5 و6 و8 و9 و2 و7.
-5. انقل جميع خانات digits كاملة إلى issueNumberRaw دون إسقاط أي خانة.`;
+const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية:
+1. ركّز حصراً على القيمة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في ترويسة الكتاب. تجاهل أرقام الهواتف وصندوق البريد، وتجاهل التواريخ الموجودة أسفل الصفحة عند التوقيع أو الختم.
+2. النماذج شبه المطبوعة: قد يكون جزء من التاريخ أو العدد مطبوعاً والباقي بخط اليد (مثل طباعة /  / ٢٠٢ وإكمال ٦ واليوم والشهر بالقلم). ادمج المطبوع والمكتوب بالقلم في القيمة النهائية الكاملة.
+3. التمييز الدقيق للأرقام الهندية المكتوبة باليد (٠ إلى ٩):
+   - (٠) نقطة حبر صغيرة واضحة في منتصف ارتفاع السطر: انتبه جداً لعدم إسقاط الصفر في الأعداد (مثل ١٠، ٢٠، ٣٠، ١٠٥، ٢٠٢٥، ٢٠٢٦، ١٤٤٧)، ولا تخلط بينه وبين نقاط السطر المطبوع أسفل الخط.
+   - (٥) حلقة أو دائرة أو قلب مغلق واضح الحجم (أكبر وأجوف من نقطة الصفر ٠).
+   - (٢) معقوفة الرأس لليمين (┌) ثم خط نازل؛ (٦) معقوفة الرأس لليسار (┐) ثم خط نازل — راجع اتجاه رأس القوس يمين أم يسار قبل الجزم بين ٢ و٦.
+   - (٧) مفتوحة للأعلى (∨)؛ (٨) مفتوحة للأسفل (∧).
+   - (٣) لها سنّتان أو ثلاث أسنان في أعلاها؛ (٤) متعرجة لليمين (٤)؛ (٩) حلقة علوية بذيل نازل.
+   - (١) خط عمودي للرقم، بينما (/) خط مائل فاصل أطول؛ لا تحوّل الفاصل المائل (/) إلى الرقم ١.
+4. للأرقام الغربية اليدوية (0-9): دقق في التمييز بين 0 و6 و8 و9، وبين 1 و7 والفاصل /، وبين 2 و3 و5، و4 و9.
+5. قواعد العدد (issueNumberRaw):
+   - اقرأ كافة الرموز والأرقام والحروف والشرطات المائلة المكتوبة في حقل العدد كاملةً (سواء كانت أرقاماً فقط أو تحوي بادئة حروف مثل م/٤/١٢٨٥).
+   - افحص كل خانة في digits وتحقق من عدم سقوط أي رقم وسطي (خاصة النقطة ٠) أو رقم ملاصق للنقطتين (:) وسجّله في beforeColon.
+6. قواعد التاريخ (dateRaw):
+   - قد يُكتب التاريخ بخط اليد بصيغة (يوم/شهر/سنة) أو (سنة/شهر/يوم). ميّز السنة ذات الأربعة أرقام (مثل ٢٠٢٤، ٢٠٢٥، ٢٠٢٦، ١٤٤٦، ١٤٤٧) والشهر (١-١٢) واليوم (١-٣١) بدقة، وتأكد من عدم سقوط الصفر ٠ في خانة المئات أو الآحاد (فلا تتحول ٢٠٢٦ إلى ٢٢٦ أو ١٠ إلى ١).
+   - عبّئ dateDay وdateMonth وdateYear بدقة مطابقة لـ dateRaw.`;
 
-const HEADER_OCR_INSTRUCTION = `أنت مدقق بصري متخصص حصرياً في قراءة خط اليد بدقة شديدة في حقلَي (العدد) و(التاريخ).
+const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي في ترويسات الكتب الرسمية (حقل العدد وحقل التاريخ) بدقة بالغة دون تخمين.
 ${HANDWRITING_RULES}`;
 
 const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بإيجاز ودقة.`;
@@ -184,8 +211,20 @@ function toWesternDigits(str: string): string {
     .replace(/[۰-۹]/g, (d) => String(persian.indexOf(d)));
 }
 
-function resolveIssueNumber(rawIssue: string, digits?: unknown): string {
-  const cleanRaw = (rawIssue || '').trim();
+function cleanLabelNoise(value: string, labels: string[]): string {
+  let out = (value || '').trim();
+  for (const label of labels) {
+    out = out.replace(new RegExp(`^${label}\\s*:?\\s*`, 'i'), '');
+  }
+  return out.replace(/^[:：]+|[:：]+$/g, '').trim();
+}
+
+function resolveIssueNumber(
+  rawIssue: string,
+  digits?: unknown,
+  beforeColon?: string
+): string {
+  const cleanRaw = cleanLabelNoise(rawIssue || '', ['العدد', 'رقم\\s*الكتاب', 'No\\.?']);
   if (!Array.isArray(digits) || digits.length === 0) return cleanRaw;
 
   const chars = digits
@@ -201,34 +240,140 @@ function resolveIssueNumber(rawIssue: string, digits?: unknown): string {
       }
       return '';
     })
-    .filter((c) => c.length > 0 && c.length <= 2);
+    .map((c) => c.replace(/^[:：]+|[:：]+$/g, '').trim())
+    .filter((c) => c.length > 0 && c.length <= 6);
 
   if (chars.length === 0) return cleanRaw;
   const joined = chars.join('');
   if (!cleanRaw) return joined;
-  if (toWesternDigits(joined).length > toWesternDigits(cleanRaw).length) {
+
+  const rawHasLettersOrSlash = /[ء-يA-Za-z\/\\-]/.test(cleanRaw);
+  const joinedDigitsCount = toWesternDigits(joined).replace(/\D/g, '').length;
+  const rawDigitsCount = toWesternDigits(cleanRaw).replace(/\D/g, '').length;
+
+  if (!rawHasLettersOrSlash && joinedDigitsCount > rawDigitsCount) {
     return joined;
   }
+
+  const colonChar = (beforeColon || '').replace(/^[:：\s]+|[:：\s]+$/g, '').trim();
+  if (
+    !rawHasLettersOrSlash &&
+    colonChar &&
+    /^[0-9٠-٩۰-۹]$/.test(colonChar) &&
+    joined.endsWith(colonChar) &&
+    !cleanRaw.endsWith(colonChar) &&
+    toWesternDigits(cleanRaw + colonChar) === toWesternDigits(joined)
+  ) {
+    return joined;
+  }
+
   return cleanRaw;
 }
 
-function normalizeDateString(rawDate: string): string {
-  const western = toWesternDigits(rawDate).replace(/\s+/g, '');
-  const parts = western.split(/[\/\-.]+/).filter(Boolean);
-  if (parts.length === 3) {
-    const [a, b, c] = parts;
-    if (c.length === 4 && Number(a) <= 31) {
-      return `${c}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
-    }
-    if (a.length === 4) {
-      return `${a}/${b.padStart(2, '0')}/${c.padStart(2, '0')}`;
-    }
-    if (c.length === 2 && Number(a) <= 31) {
-      const fullYear = Number(c) >= 40 ? `14${c}` : `20${c}`;
-      return `${fullYear}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
+function resolveDateRaw(headerResult: Record<string, any>): string {
+  const raw = cleanLabelNoise(headerResult.dateRaw || '', ['التاريخ', 'Date']);
+  const day = cleanLabelNoise(String(headerResult.dateDay || ''), []);
+  const month = cleanLabelNoise(String(headerResult.dateMonth || ''), []);
+  const year = cleanLabelNoise(String(headerResult.dateYear || ''), []);
+
+  if (raw) {
+    const rawParts = toWesternDigits(raw)
+      .split(/[\s\/\\\-.,،]+/)
+      .map((p) => p.replace(/\D/g, ''))
+      .filter(Boolean);
+    if (rawParts.length === 3) {
+      return raw;
     }
   }
-  return western;
+
+  if (day && month && year) {
+    const dNum = Number(toWesternDigits(day).replace(/\D/g, ''));
+    const mNum = Number(toWesternDigits(month).replace(/\D/g, ''));
+    const yStr = toWesternDigits(year).replace(/\D/g, '');
+    if (dNum >= 1 && dNum <= 31 && mNum >= 1 && mNum <= 12 && (yStr.length === 4 || yStr.length === 2)) {
+      return `${day}/${month}/${year}`;
+    }
+  }
+
+  return raw;
+}
+
+function normalizeDateString(
+  rawDate: string,
+  dateDay?: string,
+  dateMonth?: string,
+  dateYear?: string
+): string {
+  const western = toWesternDigits(rawDate || '').trim();
+  const parts = western
+    .split(/[\s\/\\\-.,،]+/)
+    .map((p) => p.replace(/\D/g, ''))
+    .filter(Boolean);
+
+  if (parts.length === 3) {
+    const [a, b, c] = parts;
+    const yearHint = toWesternDigits(dateYear || '').replace(/\D/g, '');
+
+    if (c.length === 4 && Number(a) <= 31 && Number(b) <= 31) {
+      if (Number(b) > 12 && Number(a) <= 12) {
+        return `${c}/${a.padStart(2, '0')}/${b.padStart(2, '0')}`;
+      }
+      return `${c}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
+    }
+
+    if (a.length === 4 && Number(b) <= 31 && Number(c) <= 31) {
+      if (Number(b) > 12 && Number(c) <= 12) {
+        return `${a}/${c.padStart(2, '0')}/${b.padStart(2, '0')}`;
+      }
+      return `${a}/${b.padStart(2, '0')}/${c.padStart(2, '0')}`;
+    }
+
+    if (c.length === 2 && Number(a) <= 31 && Number(b) <= 31) {
+      const resolvedYear =
+        yearHint.length === 4 && yearHint.endsWith(c)
+          ? yearHint
+          : Number(c) >= 40
+          ? `14${c}`
+          : `20${c}`;
+      if (Number(b) > 12 && Number(a) <= 12) {
+        return `${resolvedYear}/${a.padStart(2, '0')}/${b.padStart(2, '0')}`;
+      }
+      return `${resolvedYear}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
+    }
+  }
+
+  const d = toWesternDigits(dateDay || '').replace(/\D/g, '');
+  const m = toWesternDigits(dateMonth || '').replace(/\D/g, '');
+  const y = toWesternDigits(dateYear || '').replace(/\D/g, '');
+  if (d && m && y) {
+    const dNum = Number(d);
+    const mNum = Number(m);
+    if (dNum >= 1 && dNum <= 31 && mNum >= 1 && mNum <= 12) {
+      const fullY =
+        y.length === 4 ? y : y.length === 2 ? (Number(y) >= 40 ? `14${y}` : `20${y}`) : y;
+      if (fullY.length === 4) {
+        return `${fullY}/${m.padStart(2, '0')}/${d.padStart(2, '0')}`;
+      }
+    }
+  }
+
+  return western.replace(/\s+/g, '');
+}
+
+function resolveCalendarType(
+  rawCalendarType: string | undefined,
+  normalizedDate: string
+): 'gregorian' | 'hijri' | 'unknown' {
+  if (rawCalendarType === 'gregorian' || rawCalendarType === 'hijri') {
+    return rawCalendarType;
+  }
+  const yearMatch = normalizedDate.match(/^(\d{4})\//);
+  if (yearMatch) {
+    const yr = Number(yearMatch[1]);
+    if (yr >= 1900 && yr <= 2100) return 'gregorian';
+    if (yr >= 1300 && yr <= 1550) return 'hijri';
+  }
+  return 'unknown';
 }
 
 function getApiErrorStatus(err: unknown): number | undefined {
@@ -329,7 +474,7 @@ async function runHeaderHandwritingOcr(
       },
     },
     {
-      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) بخط اليد بدقة شديدة. سجّل كل خانة من اليسار لليمين في digits وتحقق من الرقم الملاصق للنقطتين (:) في beforeColon.${hintLine}`,
+      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) بدقة تامة من الصورة مع التركيز الشديد على خط اليد. افحص كل خانة للعدد في digits وتحقق من الرقم الملاصق للنقطتين في beforeColon، وفصّل اليوم والشهر والسنة في dateDay وdateMonth وdateYear دون إسقاط الصفر (٠).${hintLine}`,
     },
   ];
 
@@ -352,11 +497,10 @@ async function runHeaderHandwritingOcr(
       },
     });
 
-  const primaryModel =
-    precisionMode === 'ultra' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
+  const primaryModel = 'gemini-4-hydrogen';
   const primaryLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW;
-  const timeoutMs = precisionMode === 'ultra' ? 20000 : 18000;
+    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
+  const timeoutMs = precisionMode === 'ultra' ? 24000 : 19000;
 
   let response;
   try {
@@ -369,12 +513,12 @@ async function runHeaderHandwritingOcr(
     if (status === 400) {
       try {
         response = await withTimeout(
-          callModel('gemini-3.1-flash-lite', null, false),
+          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
           timeoutMs
         );
       } catch {
         response = await withTimeout(
-          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
+          callModel('gemini-3.1-flash-lite', null, false),
           timeoutMs
         );
       }
@@ -383,14 +527,14 @@ async function runHeaderHandwritingOcr(
         response = await callWithRetry(
           () =>
             withTimeout(
-              callModel('gemini-3.1-flash-lite', null, false),
+              callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
               timeoutMs
             ),
           1
         );
       } catch {
         response = await withTimeout(
-          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
+          callModel('gemini-3.1-flash-lite', null, false),
           timeoutMs
         );
       }
@@ -462,9 +606,16 @@ function buildHeaderPayload(
 ) {
   const issueRaw = resolveIssueNumber(
     headerResult.issueNumberRaw || '',
-    headerResult.digits
+    headerResult.digits,
+    headerResult.beforeColon
   );
-  const dateRaw = headerResult.dateRaw || '';
+  const dateRaw = resolveDateRaw(headerResult);
+  const dateNormalized = normalizeDateString(
+    dateRaw,
+    headerResult.dateDay,
+    headerResult.dateMonth,
+    headerResult.dateYear
+  );
 
   return {
     issueNumberRaw: issueRaw,
@@ -473,12 +624,12 @@ function buildHeaderPayload(
     alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
     issueNumberBox: headerResult.issueNumberBox || null,
     dateRaw,
-    dateNormalized: normalizeDateString(dateRaw),
+    dateNormalized,
     dateConfidence: headerResult.dateConfidence || 'medium',
     alternativeDate: headerResult.alternativeDate || '',
     dateBox: headerResult.dateBox || null,
     boxReferenceImage,
-    calendarType: headerResult.calendarType || 'unknown',
+    calendarType: resolveCalendarType(headerResult.calendarType, dateNormalized),
     isHandwrittenDetected: Boolean(headerResult.isHandwrittenDetected),
   };
 }

@@ -116,10 +116,17 @@ export async function enhanceInkContrastDataUrl(dataUrl: string): Promise<string
   return canvas.toDataURL('image/jpeg', 0.95);
 }
 
+export const TOP_HEADER_BOX: BoundingBox = {
+  ymin: 0,
+  xmin: 0,
+  ymax: 500,
+  xmax: 1000,
+};
+
 export const TOP_RIGHT_BOX: BoundingBox = {
   ymin: 0,
-  xmin: 340,
-  ymax: 470,
+  xmin: 260,
+  ymax: 500,
   xmax: 1000,
 };
 
@@ -168,8 +175,8 @@ export async function enhanceHandwritingCropDataUrl(dataUrl: string): Promise<st
   let acc = 0;
   let low = 0;
   let high = 255;
-  const lowTarget = Math.max(1, Math.floor(totalPixels * 0.01));
-  const highTarget = Math.floor(totalPixels * 0.90);
+  const lowTarget = Math.max(1, Math.floor(totalPixels * 0.005));
+  const highTarget = Math.floor(totalPixels * 0.88);
 
   for (let v = 0; v < 256; v++) {
     acc += hist[v];
@@ -192,16 +199,16 @@ export async function enhanceHandwritingCropDataUrl(dataUrl: string): Promise<st
   for (let i = 0; i < data.length; i += 4) {
     for (let c = 0; c < 3; c++) {
       const norm = Math.min(1, Math.max(0, (data[i + c] - low) / range));
-      // Mild gamma < 1 makes faint pen strokes darker while keeping white paper clean
-      const boosted = norm < 0.85 ? Math.pow(norm, 1.18) : norm;
+      // Mild gamma makes faint ballpoint/ink pen strokes crisp dark while keeping paper clean
+      const boosted = norm < 0.85 ? Math.pow(norm, 1.22) : norm;
       stretched[i + c] = Math.round(boosted * 255);
     }
     stretched[i + 3] = 255;
   }
 
-  // Gentle 3x3 sharpening pass to crisp up pen stroke hooks and dots
+  // Gentle 3x3 sharpening pass to clarify pen hooks without creating false ink specks
   const out = new Uint8ClampedArray(stretched);
-  const amount = 0.22;
+  const amount = 0.1;
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const idx = (y * w + x) * 4;
