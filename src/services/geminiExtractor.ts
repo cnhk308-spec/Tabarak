@@ -243,6 +243,51 @@ function stripDataUrlPrefix(input: string): string {
   return input.includes(',') ? input.split(',')[1] : input;
 }
 
+function getApiErrorStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as { status?: unknown; code?: unknown; message?: unknown };
+  if (typeof e.status === 'number') return e.status;
+  if (typeof e.code === 'number') return e.code;
+  if (typeof e.message === 'string') {
+    const msg = e.message;
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return 503;
+    }
+    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      return 429;
+    }
+    if (msg.includes('400') || msg.includes('INVALID_ARGUMENT')) {
+      return 400;
+    }
+    if (
+      msg.includes('401') ||
+      msg.includes('403') ||
+      msg.includes('PERMISSION_DENIED') ||
+      msg.includes('API_KEY_INVALID')
+    ) {
+      return 403;
+    }
+  }
+  return undefined;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(Object.assign(new Error('Request timeout'), { status: 503 }));
+    }, ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -250,13 +295,12 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T
       return await fn();
     } catch (err: unknown) {
       lastError = err;
-      const errObj = err as { status?: number; code?: number };
-      const status = errObj?.status || errObj?.code;
+      const status = getApiErrorStatus(err);
       const isTransient = status === 429 || status === 503 || status === 500;
       if (!isTransient || attempt === maxRetries) {
         throw err;
       }
-      const delayMs = 450 * Math.pow(2, attempt);
+      const delayMs = 350 * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -270,9 +314,6 @@ async function runHeaderHandwritingOcrBrowser(
   precisionMode: PrecisionMode,
   hintLine: string
 ) {
-  const thinkingLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
-
   const parts = [
     {
       inlineData: {
@@ -287,7 +328,7 @@ async function runHeaderHandwritingOcrBrowser(
 
   const callModel = (
     model: string,
-    level: ThinkingLevel,
+    level: ThinkingLevel | null,
     useHighMediaRes: boolean
   ) =>
     ai.models.generateContent({
@@ -297,33 +338,78 @@ async function runHeaderHandwritingOcrBrowser(
         systemInstruction: HEADER_OCR_INSTRUCTION,
         responseMimeType: 'application/json',
         responseSchema: headerHandwritingSchema,
-        thinkingConfig: { thinkingLevel: level },
+        ...(level ? { thinkingConfig: { thinkingLevel: level } } : {}),
         ...(useHighMediaRes
           ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH }
           : {}),
       },
     });
 
+  const primaryModel =
+    precisionMode === 'ultra' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
+  const primaryLevel = ThinkingLevel.MEDIUM;
+  const fallbackModel =
+    precisionMode === 'ultra' ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
+  const fallbackLevel =
+    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
+  const timeoutMs = precisionMode === 'ultra' ? 9000 : 7000;
+
   let response;
   try {
-    response = await callModel('gemini-4-hydrogen', thinkingLevel, true);
+    response = await withTimeout(
+      callModel(primaryModel, primaryLevel, true),
+      timeoutMs
+    );
   } catch (err: unknown) {
-    const errObj = err as { status?: number; code?: number; message?: string };
-    const status = errObj?.status || errObj?.code;
-    if (status === 400) {
-      response = await callModel('gemini-4-hydrogen', thinkingLevel, false);
-    } else if (status === 429 || status === 503) {
-      response = await callWithRetry(
-        () => callModel('gemini-3.1-flash-lite', ThinkingLevel.HIGH, true),
-        1
-      );
+    const errObj = err as { message?: string };
+    const status = getApiErrorStatus(err);
+    const msg = errObj?.message || '';
+    if (msg.includes('PROXY_GENERATION_DISABLED') || status === 400) {
+      try {
+        response = await withTimeout(
+          callModel(primaryModel, null, false),
+          timeoutMs
+        );
+      } catch {
+        try {
+          response = await withTimeout(
+            callModel(fallbackModel, fallbackLevel, false),
+            timeoutMs
+          );
+        } catch (fbErr: unknown) {
+          const fbMsg = (fbErr as { message?: string })?.message || msg;
+          if (fbMsg.includes('PROXY_GENERATION_DISABLED')) {
+            throw Object.assign(new Error(fbMsg), { isProxyDisabled: true });
+          }
+          throw fbErr;
+        }
+      }
+    } else if (status === 429 || status === 503 || status === 500) {
+      try {
+        response = await callWithRetry(
+          () => callModel(fallbackModel, fallbackLevel, true),
+          1
+        );
+      } catch (fbErr: unknown) {
+        const fbStatus = getApiErrorStatus(fbErr);
+        if (fbStatus === 400) {
+          response = await callModel(fallbackModel, null, false);
+        } else if (fbStatus === 503 || fbStatus === 429) {
+          throw new Error(
+            'الخدمة تشهد ضغطاً مؤقتاً حالياً (503). يرجى الضغط على إعادة المحاولة بعد ثوانٍ.'
+          );
+        } else {
+          throw fbErr;
+        }
+      }
     } else if (status === 401 || status === 403) {
-      throw new Error('مفتاح Gemini API غير صالح أو مرفوض. يرجى التحقق من المفتاح المدخل.');
+      throw Object.assign(
+        new Error('مفتاح Gemini API غير صالح أو مرفوض. يرجى التحقق من المفتاح المدخل أو مسحه.'),
+        { isKeyRejected: true }
+      );
     } else {
       throw new Error(
-        errObj?.message
-          ? `تعذر إكمال التحليل: ${errObj.message}`
-          : 'حدث خطأ أثناء تحليل صورة الكتاب.'
+        msg ? `تعذر إكمال التحليل: ${msg}` : 'حدث خطأ أثناء تحليل صورة الكتاب.'
       );
     }
   }
@@ -456,6 +542,55 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
   return data.result as T;
 }
 
+async function extractViaServer(
+  params: ServerExtractParams,
+  callbacks?: { onHeaderReady?: (headerResult: ExtractionResult) => void }
+): Promise<ExtractionResult> {
+  const hasSeparateHeader = Boolean(params.headerImageBase64);
+  if (!hasSeparateHeader) {
+    const headerOnly = await postJson<ExtractionResult>('/api/extract-header', {
+      headerImageBase64: params.imageBase64,
+      headerMimeType: params.mimeType,
+      precisionMode: params.precisionMode,
+      hintText: params.hintText,
+    });
+    callbacks?.onHeaderReady?.(headerOnly);
+    return headerOnly;
+  }
+
+  const headerPromise = postJson<ExtractionResult>('/api/extract-header', {
+    headerImageBase64: params.headerImageBase64,
+    headerMimeType: params.headerMimeType,
+    fullImageBase64: params.imageBase64,
+    fullMimeType: params.mimeType,
+    precisionMode: params.precisionMode,
+    hintText: params.hintText,
+  }).then((headerRes) => {
+    callbacks?.onHeaderReady?.(headerRes);
+    return headerRes;
+  });
+
+  const bodyPromise = postJson<BodyExtractFields>('/api/extract-body', {
+    imageBase64: params.imageBase64,
+    mimeType: params.mimeType,
+    hintText: params.hintText,
+  }).catch(
+    (): BodyExtractFields => ({
+      issuingEntity: '',
+      title: '',
+      recipient: '',
+      subject: '',
+      bodyContent: '',
+    })
+  );
+
+  const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);
+  return {
+    ...headerRes,
+    ...bodyRes,
+  };
+}
+
 export async function extractHeaderOnlyWithGemini(
   params: {
     imageBase64: string;
@@ -480,14 +615,27 @@ export async function extractHeaderOnlyWithGemini(
     params.hintText && params.hintText.trim().length > 0
       ? ` تلميح: ${params.hintText.trim()}`
       : '';
-  const raw = await runHeaderHandwritingOcrBrowser(
-    ai,
-    stripDataUrlPrefix(params.imageBase64),
-    params.mimeType || 'image/jpeg',
-    params.precisionMode,
-    hintLine
-  );
-  return buildHeaderExtractionResult(raw, 'header_crop');
+  try {
+    const raw = await runHeaderHandwritingOcrBrowser(
+      ai,
+      stripDataUrlPrefix(params.imageBase64),
+      params.mimeType || 'image/jpeg',
+      params.precisionMode,
+      hintLine
+    );
+    return buildHeaderExtractionResult(raw, 'header_crop');
+  } catch (err: unknown) {
+    const e = err as { isProxyDisabled?: boolean; isKeyRejected?: boolean };
+    if (e?.isProxyDisabled || e?.isKeyRejected) {
+      return postJson<ExtractionResult>('/api/extract-header', {
+        headerImageBase64: params.imageBase64,
+        headerMimeType: params.mimeType,
+        precisionMode: params.precisionMode,
+        hintText: params.hintText,
+      });
+    }
+    throw err;
+  }
 }
 
 export async function extractDocumentProgressive(
@@ -498,51 +646,8 @@ export async function extractDocumentProgressive(
   }
 ): Promise<ExtractionResult> {
   const trimmedKey = (customApiKey || '').trim();
-  const hasSeparateHeader = Boolean(params.headerImageBase64);
-
   if (!trimmedKey) {
-    if (!hasSeparateHeader) {
-      const headerOnly = await postJson<ExtractionResult>('/api/extract-header', {
-        headerImageBase64: params.imageBase64,
-        headerMimeType: params.mimeType,
-        precisionMode: params.precisionMode,
-        hintText: params.hintText,
-      });
-      callbacks?.onHeaderReady?.(headerOnly);
-      return headerOnly;
-    }
-
-    const headerPromise = postJson<ExtractionResult>('/api/extract-header', {
-      headerImageBase64: params.headerImageBase64,
-      headerMimeType: params.headerMimeType,
-      fullImageBase64: params.imageBase64,
-      fullMimeType: params.mimeType,
-      precisionMode: params.precisionMode,
-      hintText: params.hintText,
-    }).then((headerRes) => {
-      callbacks?.onHeaderReady?.(headerRes);
-      return headerRes;
-    });
-
-    const bodyPromise = postJson<BodyExtractFields>('/api/extract-body', {
-      imageBase64: params.imageBase64,
-      mimeType: params.mimeType,
-      hintText: params.hintText,
-    }).catch(
-      (): BodyExtractFields => ({
-        issuingEntity: '',
-        title: '',
-        recipient: '',
-        subject: '',
-        bodyContent: '',
-      })
-    );
-
-    const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);
-    return {
-      ...headerRes,
-      ...bodyRes,
-    };
+    return extractViaServer(params, callbacks);
   }
 
   const ai = new GoogleGenAI({ apiKey: trimmedKey });
@@ -552,64 +657,79 @@ export async function extractDocumentProgressive(
     params.hintText && params.hintText.trim().length > 0
       ? ` تلميح: ${params.hintText.trim()}`
       : '';
+  const hasSeparateHeader = Boolean(params.headerImageBase64);
 
-  if (!hasSeparateHeader) {
-    const rawHeader = await runHeaderHandwritingOcrBrowser(
-      ai,
-      cleanFullBase64,
-      fullMimeType,
-      params.precisionMode,
-      hintLine
-    );
-    const headerOnly = buildHeaderExtractionResult(rawHeader, 'header_crop');
-    callbacks?.onHeaderReady?.(headerOnly);
-    return headerOnly;
-  }
-
-  const cleanHeaderBase64 = stripDataUrlPrefix(params.headerImageBase64!);
-  const headerMimeType = params.headerMimeType || 'image/jpeg';
-
-  const headerPromise = (async () => {
-    let rawHeader = await runHeaderHandwritingOcrBrowser(
-      ai,
-      cleanHeaderBase64,
-      headerMimeType,
-      params.precisionMode,
-      hintLine
-    );
-    let boxReferenceImage: 'header_crop' | 'full_image' = 'header_crop';
-
-    if (
-      !rawHeader.headerFound ||
-      (!rawHeader.issueNumberRaw?.trim() && !rawHeader.dateRaw?.trim())
-    ) {
-      rawHeader = await runHeaderHandwritingOcrBrowser(
+  try {
+    if (!hasSeparateHeader) {
+      const rawHeader = await runHeaderHandwritingOcrBrowser(
         ai,
         cleanFullBase64,
         fullMimeType,
         params.precisionMode,
         hintLine
       );
-      boxReferenceImage = 'full_image';
+      const headerOnly = buildHeaderExtractionResult(rawHeader, 'header_crop');
+      callbacks?.onHeaderReady?.(headerOnly);
+      return headerOnly;
     }
 
-    const headerRes = buildHeaderExtractionResult(rawHeader, boxReferenceImage);
-    callbacks?.onHeaderReady?.(headerRes);
-    return headerRes;
-  })();
+    const cleanHeaderBase64 = stripDataUrlPrefix(params.headerImageBase64!);
+    const headerMimeType = params.headerMimeType || 'image/jpeg';
 
-  const bodyPromise = runBodyOcrBrowser(
-    ai,
-    cleanFullBase64,
-    fullMimeType,
-    hintLine
-  );
+    const headerPromise = (async () => {
+      let rawHeader = await runHeaderHandwritingOcrBrowser(
+        ai,
+        cleanHeaderBase64,
+        headerMimeType,
+        params.precisionMode,
+        hintLine
+      );
+      let boxReferenceImage: 'header_crop' | 'full_image' = 'header_crop';
 
-  const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);
-  return {
-    ...headerRes,
-    ...bodyRes,
-  };
+      if (
+        !rawHeader.headerFound ||
+        (!rawHeader.issueNumberRaw?.trim() && !rawHeader.dateRaw?.trim())
+      ) {
+        rawHeader = await runHeaderHandwritingOcrBrowser(
+          ai,
+          cleanFullBase64,
+          fullMimeType,
+          params.precisionMode,
+          hintLine
+        );
+        boxReferenceImage = 'full_image';
+      }
+
+      const headerRes = buildHeaderExtractionResult(rawHeader, boxReferenceImage);
+      callbacks?.onHeaderReady?.(headerRes);
+      return headerRes;
+    })();
+
+    const bodyPromise = runBodyOcrBrowser(
+      ai,
+      cleanFullBase64,
+      fullMimeType,
+      hintLine
+    );
+
+    const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);
+    return {
+      ...headerRes,
+      ...bodyRes,
+    };
+  } catch (err: unknown) {
+    const e = err as { isProxyDisabled?: boolean; isKeyRejected?: boolean };
+    if (e?.isProxyDisabled || e?.isKeyRejected) {
+      try {
+        return await extractViaServer(params, callbacks);
+      } catch {
+        throw new Error(
+          'المفتاح المحفوظ في زر المفتاح (أسفل اليسار) مقيّد أو غير صالح للاتصال المباشر. اضغط على زر المفتاح وامسحه لاستخدام الخادم، أو أدخل مفتاحاً صالحاً من Google AI Studio.'
+        );
+      }
+    }
+    throw err;
+  }
 }
 
 export async function extractDocumentWithGemini(

@@ -231,6 +231,51 @@ function normalizeDateString(rawDate: string): string {
   return western;
 }
 
+function getApiErrorStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as { status?: unknown; code?: unknown; message?: unknown };
+  if (typeof e.status === 'number') return e.status;
+  if (typeof e.code === 'number') return e.code;
+  if (typeof e.message === 'string') {
+    const msg = e.message;
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return 503;
+    }
+    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      return 429;
+    }
+    if (msg.includes('400') || msg.includes('INVALID_ARGUMENT')) {
+      return 400;
+    }
+    if (
+      msg.includes('401') ||
+      msg.includes('403') ||
+      msg.includes('PERMISSION_DENIED') ||
+      msg.includes('API_KEY_INVALID')
+    ) {
+      return 403;
+    }
+  }
+  return undefined;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(Object.assign(new Error('Request timeout'), { status: 503 }));
+    }, ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -238,13 +283,12 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T
       return await fn();
     } catch (err: unknown) {
       lastError = err;
-      const errObj = err as { status?: number; code?: number };
-      const status = errObj?.status || errObj?.code;
+      const status = getApiErrorStatus(err);
       const isTransient = status === 429 || status === 503 || status === 500;
       if (!isTransient || attempt === maxRetries) {
         throw err;
       }
-      const delayMs = 450 * Math.pow(2, attempt);
+      const delayMs = 350 * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -277,9 +321,6 @@ async function runHeaderHandwritingOcr(
   precisionMode: PrecisionMode,
   hintLine: string
 ) {
-  const thinkingLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
-
   const parts = [
     {
       inlineData: {
@@ -294,7 +335,7 @@ async function runHeaderHandwritingOcr(
 
   const callModel = (
     model: string,
-    level: ThinkingLevel,
+    level: ThinkingLevel | null,
     useHighMediaRes: boolean
   ) =>
     ai.models.generateContent({
@@ -304,26 +345,56 @@ async function runHeaderHandwritingOcr(
         systemInstruction: HEADER_OCR_INSTRUCTION,
         responseMimeType: 'application/json',
         responseSchema: headerHandwritingSchema,
-        thinkingConfig: { thinkingLevel: level },
+        ...(level ? { thinkingConfig: { thinkingLevel: level } } : {}),
         ...(useHighMediaRes
           ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH }
           : {}),
       },
     });
 
+  const primaryModel =
+    precisionMode === 'ultra' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
+  const primaryLevel =
+    precisionMode === 'ultra' ? ThinkingLevel.MEDIUM : ThinkingLevel.MEDIUM;
+  const fallbackModel =
+    precisionMode === 'ultra' ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
+  const fallbackLevel =
+    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
+  const timeoutMs = precisionMode === 'ultra' ? 9000 : 7000;
+
   let response;
   try {
-    response = await callModel('gemini-4-hydrogen', thinkingLevel, true);
+    response = await withTimeout(
+      callModel(primaryModel, primaryLevel, true),
+      timeoutMs
+    );
   } catch (err: unknown) {
-    const errObj = err as { status?: number; code?: number };
-    const status = errObj?.status || errObj?.code;
+    const status = getApiErrorStatus(err);
     if (status === 400) {
-      response = await callModel('gemini-4-hydrogen', thinkingLevel, false);
-    } else if (status === 429 || status === 503) {
-      response = await callWithRetry(
-        () => callModel('gemini-3.1-flash-lite', ThinkingLevel.HIGH, true),
-        1
-      );
+      try {
+        response = await withTimeout(
+          callModel(primaryModel, null, false),
+          timeoutMs
+        );
+      } catch {
+        response = await withTimeout(
+          callModel(fallbackModel, fallbackLevel, false),
+          timeoutMs
+        );
+      }
+    } else if (status === 429 || status === 503 || status === 500) {
+      try {
+        response = await callWithRetry(
+          () => callModel(fallbackModel, fallbackLevel, true),
+          1
+        );
+      } catch (fbErr: unknown) {
+        if (getApiErrorStatus(fbErr) === 400) {
+          response = await callModel(fallbackModel, null, false);
+        } else {
+          throw fbErr;
+        }
+      }
     } else {
       throw err;
     }

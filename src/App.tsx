@@ -135,10 +135,10 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 800,
-            maxDim: 1350,
+            minDim: 700,
+            maxDim: 1150,
             format: 'image/jpeg',
-            quality: 0.92,
+            quality: 0.88,
             contrastFilter: false,
           });
           resolvedMimeType = 'image/jpeg';
@@ -146,12 +146,12 @@ export default function App() {
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
           const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 960, 0.76),
+            compressImageDataUrl(imageDataUrl, 850, 0.7),
             cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              minDim: 800,
-              maxDim: 1350,
+              minDim: 700,
+              maxDim: 1150,
               format: 'image/jpeg',
-              quality: 0.92,
+              quality: 0.88,
               contrastFilter: false,
             }),
           ]);
@@ -380,6 +380,7 @@ export default function App() {
 
       setActiveView('workspace');
 
+      const queuedDocs: DocumentItem[] = [];
       for (const file of files) {
         try {
           const loaded = await loadImageFile(file);
@@ -404,17 +405,21 @@ export default function App() {
             editedBodyContent: '',
             userVerified: false,
           };
-
-          setDocuments((prev) => [newDoc, ...prev]);
-          setActiveId(id);
-
-          // Trigger server extraction immediately
-          void runExtraction(id, loaded.dataUrl, loaded.mimeType, precisionMode, {
-            applyContrast: enhanceContrast,
-          });
+          queuedDocs.push(newDoc);
         } catch {
           // Ignore unreadable individual file
         }
+      }
+
+      if (queuedDocs.length === 0) return;
+
+      setDocuments((prev) => [...queuedDocs, ...prev]);
+      setActiveId(queuedDocs[0].id);
+
+      for (const doc of queuedDocs) {
+        await runExtraction(doc.id, doc.imageDataUrl, doc.mimeType, precisionMode, {
+          applyContrast: enhanceContrast,
+        });
       }
     },
     [enhanceContrast, precisionMode, runExtraction]
