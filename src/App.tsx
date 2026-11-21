@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, FolderSearch, Loader2, X } from 'lucide-react';
 import { AppView, TopBar } from './components/TopBar';
 import { DocumentQueueSidebar } from './components/DocumentQueueSidebar';
 import { DocumentCanvas } from './components/DocumentCanvas';
@@ -20,6 +21,18 @@ import {
   PrecisionMode,
   ScanRegion,
 } from './types';
+import { exportDocumentsToXlsx } from './utils/excelExport';
+import {
+  DirectoryHandleLike,
+  canUseNativeDirectoryPicker,
+  collectImagesFromDirectoryHandle,
+  ensureDirectoryReadPermission,
+  getSavedDirectoryHandle,
+  isMobileBrowser,
+  isOfficialLetterResult,
+  isSupportedImageFile,
+  saveDirectoryHandle,
+} from './utils/folderScanner';
 import {
   TOP_RIGHT_BOX,
   compressImageDataUrl,
@@ -82,9 +95,37 @@ export default function App() {
   const [showBoxes, setShowBoxes] = useState<boolean>(true);
   const [isGeneratingSample, setIsGeneratingSample] = useState<boolean>(false);
   const [apiKey, setApiKey] = useState<string>(() => getStoredGeminiApiKey());
+  const [savedFolderName, setSavedFolderName] = useState<string | null>(null);
+  const [folderScanState, setFolderScanState] = useState<{
+    active: boolean;
+    current: number;
+    total: number;
+    officialCount: number;
+    skippedCount: number;
+    folderName: string;
+    doneMessage?: string;
+    errorMessage?: string;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const activeRunTokensRef = useRef<Record<string, number>>({});
+  const documentsRef = useRef<DocumentItem[]>(documents);
+  documentsRef.current = documents;
+
+  useEffect(() => {
+    if (canUseNativeDirectoryPicker()) {
+      void getSavedDirectoryHandle().then((handle) => {
+        if (handle?.name) {
+          setSavedFolderName(handle.name);
+        }
+      });
+    }
+    if (folderInputRef.current && !isMobileBrowser()) {
+      folderInputRef.current.setAttribute('webkitdirectory', '');
+      folderInputRef.current.setAttribute('directory', '');
+    }
+  }, []);
 
   const activeDocument = useMemo(
     () => documents.find((d) => d.id === activeId) ?? null,
@@ -102,8 +143,9 @@ export default function App() {
         cropOriginBox?: BoundingBox;
         applyContrast?: boolean;
         regionOverride?: ScanRegion;
+        baseDoc?: DocumentItem;
       }
-    ) => {
+    ): Promise<DocumentItem | null> => {
       const runToken = (activeRunTokensRef.current[docId] || 0) + 1;
       activeRunTokensRef.current[docId] = runToken;
       const isStale = () => activeRunTokensRef.current[docId] !== runToken;
@@ -195,6 +237,16 @@ export default function App() {
 
         const expectsBody = effectiveRegion === 'full' && !isCropped;
         let ultraZoomPromise: Promise<void> | null = null;
+        const tracker: {
+          headerResult: ExtractionResult | null;
+          editedIssue: string;
+          editedDate: string;
+          durationMs?: number;
+        } = {
+          headerResult: null,
+          editedIssue: '',
+          editedDate: '',
+        };
 
         const fullResult = await extractDocumentProgressive(
           {
@@ -212,6 +264,21 @@ export default function App() {
               if (isStale()) return;
               const headerMapped = mapResultBoxes(rawHeaderResult);
               const headerDurationMs = Math.round(performance.now() - startedAt);
+              const nextIssue = formatExtractedValue(
+                headerMapped.issueNumberRaw,
+                headerMapped.issueNumberNormalized,
+                digitPreference
+              );
+              const nextDate = formatExtractedValue(
+                headerMapped.dateRaw,
+                headerMapped.dateNormalized,
+                digitPreference
+              );
+
+              tracker.headerResult = headerMapped;
+              tracker.editedIssue = nextIssue;
+              tracker.editedDate = nextDate;
+              tracker.durationMs = headerDurationMs;
 
               setDocuments((prev) =>
                 prev.map((d) => {
@@ -222,16 +289,8 @@ export default function App() {
                     isBodyLoading: expectsBody,
                     extractionDurationMs: headerDurationMs,
                     result: headerMapped,
-                    editedIssueNumber: formatExtractedValue(
-                      headerMapped.issueNumberRaw,
-                      headerMapped.issueNumberNormalized,
-                      digitPreference
-                    ),
-                    editedDate: formatExtractedValue(
-                      headerMapped.dateRaw,
-                      headerMapped.dateNormalized,
-                      digitPreference
-                    ),
+                    editedIssueNumber: nextIssue,
+                    editedDate: nextDate,
                     userVerified: false,
                   };
                 })
@@ -268,6 +327,38 @@ export default function App() {
                     if (isStale()) return;
                     const zoomedIssueRaw = (zoomRes.issueNumberRaw || '').trim();
                     if (!zoomedIssueRaw) return;
+
+                    if (tracker.headerResult) {
+                      const prevRaw = tracker.headerResult.issueNumberRaw || '';
+                      const prevLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
+                      const zoomLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
+
+                      if (zoomLen < prevLen && tracker.headerResult.issueNumberConfidence === 'high') {
+                        if (zoomedIssueRaw !== prevRaw) {
+                          tracker.headerResult = {
+                            ...tracker.headerResult,
+                            alternativeIssueNumber: zoomedIssueRaw,
+                          };
+                        }
+                      } else {
+                        const nextAlt =
+                          zoomedIssueRaw !== prevRaw
+                            ? prevRaw
+                            : tracker.headerResult.alternativeIssueNumber || '';
+                        tracker.headerResult = {
+                          ...tracker.headerResult,
+                          issueNumberRaw: zoomedIssueRaw,
+                          issueNumberNormalized: zoomRes.issueNumberNormalized,
+                          issueNumberConfidence: zoomRes.issueNumberConfidence,
+                          alternativeIssueNumber: nextAlt,
+                        };
+                        tracker.editedIssue = formatExtractedValue(
+                          tracker.headerResult.issueNumberRaw,
+                          tracker.headerResult.issueNumberNormalized,
+                          digitPreference
+                        );
+                      }
+                    }
 
                     setDocuments((prev) =>
                       prev.map((d) => {
@@ -318,14 +409,39 @@ export default function App() {
           }
         );
 
-        if (isStale()) return;
+        if (isStale()) return null;
         const mappedFull = mapResultBoxes(fullResult);
         if (ultraZoomPromise) {
           await ultraZoomPromise;
         }
-        if (isStale()) return;
+        if (isStale()) return null;
 
         const durationMs = Math.round(performance.now() - startedAt);
+        const mergedSnapshot: ExtractionResult = tracker.headerResult
+          ? {
+              ...tracker.headerResult,
+              issuingEntity: mappedFull.issuingEntity || '',
+              title: mappedFull.title || '',
+              recipient: mappedFull.recipient || '',
+              subject: mappedFull.subject || '',
+              bodyContent: mappedFull.bodyContent || '',
+            }
+          : mappedFull;
+
+        const finalIssue =
+          tracker.editedIssue ||
+          formatExtractedValue(
+            mergedSnapshot.issueNumberRaw,
+            mergedSnapshot.issueNumberNormalized,
+            digitPreference
+          );
+        const finalDate =
+          tracker.editedDate ||
+          formatExtractedValue(
+            mergedSnapshot.dateRaw,
+            mergedSnapshot.dateNormalized,
+            digitPreference
+          );
 
         setDocuments((prev) =>
           prev.map((d) => {
@@ -346,6 +462,8 @@ export default function App() {
               isBodyLoading: false,
               extractionDurationMs: d.extractionDurationMs ?? durationMs,
               result: mergedResult,
+              editedIssueNumber: d.editedIssueNumber || finalIssue,
+              editedDate: d.editedDate || finalDate,
               editedIssuingEntity: mergedResult.issuingEntity || '',
               editedTitle: mergedResult.title || '',
               editedRecipient: mergedResult.recipient || '',
@@ -354,8 +472,26 @@ export default function App() {
             };
           })
         );
+
+        const baseDoc =
+          options?.baseDoc ?? documentsRef.current.find((d) => d.id === docId) ?? null;
+        if (!baseDoc) return null;
+        return {
+          ...baseDoc,
+          status: 'extracted',
+          isBodyLoading: false,
+          extractionDurationMs: tracker.durationMs ?? durationMs,
+          result: mergedSnapshot,
+          editedIssueNumber: finalIssue,
+          editedDate: finalDate,
+          editedIssuingEntity: mergedSnapshot.issuingEntity || '',
+          editedTitle: mergedSnapshot.title || '',
+          editedRecipient: mergedSnapshot.recipient || '',
+          editedSubject: mergedSnapshot.subject || '',
+          editedBodyContent: mergedSnapshot.bodyContent || '',
+        };
       } catch (err: any) {
-        if (isStale()) return;
+        if (isStale()) return null;
         setDocuments((prev) =>
           prev.map((d) =>
             d.id === docId
@@ -368,9 +504,206 @@ export default function App() {
               : d
           )
         );
+        return null;
       }
     },
     [apiKey, digitPreference, hintText, scanRegion]
+  );
+
+  const processFolderImages = useCallback(
+    async (rawFiles: File[], folderName: string) => {
+      const imageFiles = rawFiles
+        .filter(isSupportedImageFile)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+
+      if (imageFiles.length === 0) {
+        setFolderScanState({
+          active: false,
+          current: 0,
+          total: 0,
+          officialCount: 0,
+          skippedCount: 0,
+          folderName,
+          errorMessage: 'لم يتم العثور على ملفات صور داخل المجلد المحدد.',
+        });
+        return;
+      }
+
+      setActiveView('workspace');
+
+      const queuedDocs: DocumentItem[] = [];
+      for (const file of imageFiles) {
+        try {
+          const loaded = await loadImageFile(file);
+          const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          queuedDocs.push({
+            id,
+            fileName: file.name || 'صورة_كتاب_رسمي.png',
+            fileSize: file.size,
+            imageDataUrl: loaded.dataUrl,
+            mimeType: loaded.mimeType,
+            width: loaded.width,
+            height: loaded.height,
+            uploadedAt: Date.now(),
+            status: 'processing',
+            precisionMode,
+            editedIssueNumber: '',
+            editedDate: '',
+            editedIssuingEntity: '',
+            editedTitle: '',
+            editedRecipient: '',
+            editedSubject: '',
+            editedBodyContent: '',
+            userVerified: false,
+          });
+        } catch {
+          // Skip unreadable image file
+        }
+      }
+
+      if (queuedDocs.length === 0) {
+        setFolderScanState({
+          active: false,
+          current: 0,
+          total: 0,
+          officialCount: 0,
+          skippedCount: 0,
+          folderName,
+          errorMessage: 'تعذر قراءة الصور الموجودة في المجلد.',
+        });
+        return;
+      }
+
+      setDocuments((prev) => [...queuedDocs, ...prev]);
+      setActiveId(queuedDocs[0].id);
+
+      setFolderScanState({
+        active: true,
+        current: 0,
+        total: queuedDocs.length,
+        officialCount: 0,
+        skippedCount: 0,
+        folderName,
+      });
+
+      const officialDocs: DocumentItem[] = [];
+      let skippedCount = 0;
+
+      for (let i = 0; i < queuedDocs.length; i++) {
+        const doc = queuedDocs[i];
+        setActiveId(doc.id);
+        setFolderScanState({
+          active: true,
+          current: i + 1,
+          total: queuedDocs.length,
+          officialCount: officialDocs.length,
+          skippedCount,
+          folderName,
+        });
+
+        const extractedDoc = await runExtraction(
+          doc.id,
+          doc.imageDataUrl,
+          doc.mimeType,
+          precisionMode,
+          { applyContrast: enhanceContrast, baseDoc: doc }
+        );
+
+        if (extractedDoc && isOfficialLetterResult(extractedDoc.result)) {
+          officialDocs.push(extractedDoc);
+        } else {
+          skippedCount += 1;
+        }
+      }
+
+      if (officialDocs.length > 0) {
+        const safeFolderName = folderName.replace(/[\\/:*?"<>|]/g, '_');
+        const excelFileName = `كشف_${safeFolderName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        exportDocumentsToXlsx(officialDocs, excelFileName);
+        setFolderScanState({
+          active: false,
+          current: queuedDocs.length,
+          total: queuedDocs.length,
+          officialCount: officialDocs.length,
+          skippedCount,
+          folderName,
+          doneMessage: `تم فحص ${queuedDocs.length} صورة: استخراج ${officialDocs.length} كتاب رسمي${
+            skippedCount > 0 ? ` (واستبعاد ${skippedCount} صورة غير مطابقة)` : ''
+          } وتنزيل ملف Excel تلقائياً.`,
+        });
+      } else {
+        setFolderScanState({
+          active: false,
+          current: queuedDocs.length,
+          total: queuedDocs.length,
+          officialCount: 0,
+          skippedCount,
+          folderName,
+          errorMessage: `تم فحص ${queuedDocs.length} صورة ولم يتم العثور على كتب رسمية صالحة للتصدير.`,
+        });
+      }
+    },
+    [enhanceContrast, precisionMode, runExtraction]
+  );
+
+  const handleTriggerFolderScan = useCallback(
+    async (forceChooseNew = false) => {
+      if (folderScanState?.active) return;
+
+      if (!canUseNativeDirectoryPicker()) {
+        folderInputRef.current?.click();
+        return;
+      }
+
+      try {
+        let dirHandle: DirectoryHandleLike | null = null;
+
+        if (!forceChooseNew) {
+          const saved = await getSavedDirectoryHandle();
+          if (saved) {
+            const granted = await ensureDirectoryReadPermission(saved);
+            if (granted) {
+              dirHandle = saved;
+            }
+          }
+        }
+
+        if (!dirHandle) {
+          const picker = (
+            window as unknown as {
+              showDirectoryPicker: (opts?: { mode?: 'read' }) => Promise<DirectoryHandleLike>;
+            }
+          ).showDirectoryPicker;
+          dirHandle = await picker({ mode: 'read' });
+          await saveDirectoryHandle(dirHandle);
+          setSavedFolderName(dirHandle.name);
+        }
+
+        setFolderScanState({
+          active: true,
+          current: 0,
+          total: 0,
+          officialCount: 0,
+          skippedCount: 0,
+          folderName: dirHandle.name,
+        });
+
+        const files = await collectImagesFromDirectoryHandle(dirHandle);
+        await processFolderImages(files, dirHandle.name);
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+        setFolderScanState((prev) => ({
+          active: false,
+          current: prev?.current ?? 0,
+          total: prev?.total ?? 0,
+          officialCount: prev?.officialCount ?? 0,
+          skippedCount: prev?.skippedCount ?? 0,
+          folderName: prev?.folderName ?? savedFolderName ?? 'المجلد',
+          errorMessage: err?.message || 'تعذر فتح المجلد المحدد.',
+        }));
+      }
+    },
+    [folderScanState?.active, processFolderImages, savedFolderName]
   );
 
   const handleFilesSelected = useCallback(
@@ -587,12 +920,23 @@ export default function App() {
     );
   };
 
+  const folderScanLabel = folderScanState?.active
+    ? folderScanState.total > 0
+      ? `جاري المسح (${folderScanState.current}/${folderScanState.total})`
+      : 'جاري قراءة المجلد...'
+    : undefined;
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <TopBar
         activeView={activeView}
         onChangeView={setActiveView}
         onTriggerUpload={handleTriggerUpload}
+        onTriggerFolderScan={() => void handleTriggerFolderScan(false)}
+        onChangeSavedFolder={() => void handleTriggerFolderScan(true)}
+        savedFolderName={savedFolderName}
+        isFolderScanning={Boolean(folderScanState?.active)}
+        folderScanLabel={folderScanLabel}
       />
 
       <input
@@ -609,7 +953,88 @@ export default function App() {
         }}
       />
 
+      <input
+        ref={folderInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            const selectedFiles = Array.from(e.target.files);
+            const relPath =
+              (selectedFiles[0] as File & { webkitRelativePath?: string })
+                ?.webkitRelativePath || '';
+            const inferredFolderName =
+              relPath.split('/')[0] || 'المجلد_المختار';
+            e.target.value = '';
+            void processFolderImages(selectedFiles, inferredFolderName);
+          }
+        }}
+      />
+
       <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 sm:px-6 py-5 space-y-6">
+        {folderScanState && (
+          <div
+            role="status"
+            className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs sm:text-sm ${
+              folderScanState.active
+                ? 'border-emerald-200 bg-emerald-50/80 text-emerald-950'
+                : folderScanState.errorMessage
+                ? 'border-amber-200 bg-amber-50 text-amber-950'
+                : 'border-emerald-300 bg-emerald-50 text-emerald-950'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              {folderScanState.active ? (
+                <Loader2
+                  className="h-4 w-4 animate-spin text-emerald-700 shrink-0"
+                  aria-hidden="true"
+                />
+              ) : folderScanState.errorMessage ? (
+                <AlertTriangle
+                  className="h-4 w-4 text-amber-700 shrink-0"
+                  aria-hidden="true"
+                />
+              ) : (
+                <CheckCircle2
+                  className="h-4 w-4 text-emerald-700 shrink-0"
+                  aria-hidden="true"
+                />
+              )}
+
+              <div className="min-w-0">
+                {folderScanState.active ? (
+                  <p className="font-medium">
+                    <FolderSearch
+                      className="inline h-3.5 w-3.5 ml-1.5 text-emerald-700"
+                      aria-hidden="true"
+                    />
+                    {folderScanState.total > 0
+                      ? `جاري مسح «${folderScanState.folderName}»: صورة ${folderScanState.current} من ${folderScanState.total} (تم العثور على ${folderScanState.officialCount} كتاب رسمي)... وسيتم تنزيل Excel تلقائياً فور الانتهاء.`
+                      : `جاري البحث عن صور الكتب الرسمية داخل «${folderScanState.folderName}»...`}
+                  </p>
+                ) : (
+                  <p className="font-medium">
+                    {folderScanState.doneMessage || folderScanState.errorMessage}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {!folderScanState.active && (
+              <button
+                type="button"
+                aria-label="إغلاق الإشعار"
+                onClick={() => setFolderScanState(null)}
+                className="rounded-md p-1 text-slate-500 hover:bg-white/70 hover:text-slate-900 cursor-pointer"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        )}
+
         {activeView === 'workspace' && (
           <>
             <div className="flex flex-col lg:flex-row items-stretch gap-5">
@@ -636,6 +1061,10 @@ export default function App() {
                 onSelectDocument={setActiveId}
                 onRemoveDocument={handleRemoveDocument}
                 onTriggerUpload={handleTriggerUpload}
+                onTriggerFolderScan={() => void handleTriggerFolderScan(false)}
+                onChangeSavedFolder={() => void handleTriggerFolderScan(true)}
+                savedFolderName={savedFolderName}
+                isFolderScanning={Boolean(folderScanState?.active)}
                 onLoadSample={handleLoadSample}
                 isGeneratingSample={isGeneratingSample}
               />

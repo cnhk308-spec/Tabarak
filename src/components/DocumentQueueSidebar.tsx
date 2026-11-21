@@ -7,6 +7,7 @@ import {
   Trash2,
   Upload,
   FileText,
+  FolderSearch,
 } from 'lucide-react';
 import { DocumentItem, PrecisionMode, ScanRegion } from '../types';
 import { formatFileSize } from '../utils/imageProcessing';
@@ -23,6 +24,10 @@ interface DocumentQueueSidebarProps {
   onSelectDocument: (id: string) => void;
   onRemoveDocument: (id: string) => void;
   onTriggerUpload: () => void;
+  onTriggerFolderScan: () => void;
+  onChangeSavedFolder?: () => void;
+  savedFolderName?: string | null;
+  isFolderScanning?: boolean;
   onLoadSample: () => void;
   isGeneratingSample: boolean;
 }
@@ -39,6 +44,10 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
   onSelectDocument,
   onRemoveDocument,
   onTriggerUpload,
+  onTriggerFolderScan,
+  onChangeSavedFolder,
+  savedFolderName,
+  isFolderScanning = false,
   onLoadSample,
   isGeneratingSample,
 }) => {
@@ -148,6 +157,35 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
 
         {/* Quick Actions */}
         <div className="flex flex-col gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onTriggerFolderScan}
+            disabled={isFolderScanning}
+            className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-700 bg-emerald-50/70 px-3 py-2 text-xs font-semibold text-emerald-900 transition-colors hover:bg-emerald-100/80 disabled:opacity-60 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {isFolderScanning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden="true" />
+            ) : (
+              <FolderSearch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span>
+              {savedFolderName
+                ? `مسح «${savedFolderName}» وتنزيل Excel`
+                : 'مسح مجلد وتنزيل Excel تلقائياً'}
+            </span>
+          </button>
+          {savedFolderName && onChangeSavedFolder && !isFolderScanning && (
+            <div className="flex items-center justify-between px-1 text-[11px] text-slate-500">
+              <span className="truncate">المجلد المحفوظ: {savedFolderName}</span>
+              <button
+                type="button"
+                onClick={onChangeSavedFolder}
+                className="text-blue-900 underline underline-offset-2 hover:text-blue-700 shrink-0 cursor-pointer"
+              >
+                تغيير
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={onTriggerUpload}
