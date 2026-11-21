@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   Upload,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { DocumentItem } from '../types';
 
 interface LedgerTableViewProps {
@@ -51,13 +52,14 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
     });
   }, [documents, filterStatus, searchQuery]);
 
-  const handleExportCsv = () => {
+  const handleExportXlsx = () => {
     const headers = [
       'التسلسل',
       'اسم الملف',
       'العدد',
       'التاريخ',
       'التقويم',
+      'الجهة المصدرة',
       'العنوان',
       'إلى (المرسل إليه)',
       'الموضوع',
@@ -65,36 +67,45 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
       'الحالة',
     ];
     const rows = filteredDocs.map((doc, idx) => [
-      String(idx + 1),
+      idx + 1,
       doc.fileName,
-      doc.editedIssueNumber,
-      doc.editedDate,
+      doc.editedIssueNumber || '',
+      doc.editedDate || '',
       doc.result?.calendarType === 'hijri'
         ? 'هجري'
         : doc.result?.calendarType === 'gregorian'
         ? 'ميلادي'
         : '',
-      doc.editedTitle,
-      doc.editedRecipient,
-      doc.editedSubject,
-      doc.editedBodyContent,
+      doc.editedIssuingEntity || '',
+      doc.editedTitle || '',
+      doc.editedRecipient || '',
+      doc.editedSubject || '',
+      doc.editedBodyContent || '',
       doc.userVerified ? 'معتمد' : 'قيد المراجعة',
     ]);
 
-    const escapeCsv = (cell: string) => `"${(cell || '').replace(/"/g, '""')}"`;
-    const csvContent =
-      '\uFEFF' +
-      [headers.map(escapeCsv).join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join(
-        '\n'
-      );
+    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    worksheet['!cols'] = [
+      { wch: 8 },
+      { wch: 24 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 26 },
+      { wch: 28 },
+      { wch: 48 },
+      { wch: 14 },
+    ];
+    worksheet['!views'] = [{ rightToLeft: true }];
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `سجل_الكتب_الرسمية_${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const workbook = XLSX.utils.book_new();
+    workbook.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'سجل الكتب');
+
+    const fileName = `سجل_الكتب_الرسمية_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
   };
 
   const handleExportJson = () => {
@@ -194,11 +205,11 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
             <>
               <button
                 type="button"
-                onClick={handleExportCsv}
+                onClick={handleExportXlsx}
                 className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>تصدير CSV</span>
+                <span>تصدير XLSX</span>
               </button>
               {!compact && (
                 <button
