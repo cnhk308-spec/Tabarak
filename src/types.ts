@@ -39,6 +39,7 @@ export interface ExtractionResult {
   handwritingNotes?: string;
   isHandwrittenDetected?: boolean;
   boxReferenceImage?: 'header_crop' | 'full_image';
+  headerRegionBox?: BoundingBox | null;
 }
 
 export type DocumentStatus = 'pending' | 'processing' | 'extracted' | 'verified' | 'error';

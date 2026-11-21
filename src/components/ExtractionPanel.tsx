@@ -15,7 +15,6 @@ import {
   convertToEasternDigits,
   convertToWesternDigits,
   cropRegionDataUrl,
-  expandBoundingBox,
 } from '../utils/imageProcessing';
 
 interface ExtractionPanelProps {
@@ -73,56 +72,26 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
   onRetry,
   onReanalyzeUltra,
 }) => {
-  const [issueCropUrl, setIssueCropUrl] = useState<string | null>(null);
-  const [dateCropUrl, setDateCropUrl] = useState<string | null>(null);
   const [headerCropUrl, setHeaderCropUrl] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setIssueCropUrl(null);
-    setDateCropUrl(null);
     setHeaderCropUrl(null);
 
     if (!documentItem?.result) return;
 
-    const { issueNumberBox, dateBox } = documentItem.result;
+    const targetRegion = documentItem.result.headerRegionBox || TOP_RIGHT_BOX;
 
-    if (issueNumberBox) {
-      cropRegionDataUrl(
-        documentItem.imageDataUrl,
-        expandBoundingBox(issueNumberBox, 110, 145, 48, 48),
-        0
-      )
-        .then((url) => {
-          if (!cancelled) setIssueCropUrl(url);
-        })
-        .catch(() => {});
-    }
-
-    if (dateBox) {
-      cropRegionDataUrl(
-        documentItem.imageDataUrl,
-        expandBoundingBox(dateBox, 110, 145, 48, 48),
-        0
-      )
-        .then((url) => {
-          if (!cancelled) setDateCropUrl(url);
-        })
-        .catch(() => {});
-    }
-
-    if (!issueNumberBox && !dateBox) {
-      cropRegionDataUrl(documentItem.imageDataUrl, TOP_RIGHT_BOX, 0, {
-        maxDim: 900,
-        format: 'image/jpeg',
-        quality: 0.9,
+    cropRegionDataUrl(documentItem.imageDataUrl, targetRegion, 0, {
+      maxDim: 1400,
+      format: 'image/png',
+      contrastFilter: false,
+    })
+      .then((url) => {
+        if (!cancelled) setHeaderCropUrl(url);
       })
-        .then((url) => {
-          if (!cancelled) setHeaderCropUrl(url);
-        })
-        .catch(() => {});
-    }
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -276,17 +245,17 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                 </div>
               </div>
 
-              {/* Header Crop Loupe in Ultra-Fast Mode */}
+              {/* Single Large Upper-Right Preview (الجزء الأيمن: العدد والتاريخ) */}
               {headerCropUrl && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[11px] text-slate-500">
-                    معاينة الترويسة (الجزء العلوي الأيمن):
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                  <div className="mb-1.5 text-[11px] font-medium text-slate-600">
+                    منطقة القراءة المكبّرة (الجزء الأيمن — العدد والتاريخ):
                   </div>
                   <img
                     src={headerCropUrl}
-                    alt="الجزء العلوي الأيمن من الكتاب"
+                    alt="الجزء الأيمن من الكتاب"
                     referrerPolicy="no-referrer"
-                    className="max-h-28 w-auto mx-auto rounded border border-slate-200 bg-white object-contain"
+                    className="max-h-56 w-full mx-auto rounded border border-slate-200 bg-white object-contain"
                   />
                 </div>
               )}
@@ -302,20 +271,6 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                   </label>
                   {renderConfidenceIndicator(documentItem.result.issueNumberConfidence)}
                 </div>
-
-                {issueCropUrl && (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <div className="mb-1 text-[11px] text-slate-500">
-                      موضع العدد المكبّر من الصورة:
-                    </div>
-                    <img
-                      src={issueCropUrl}
-                      alt="موضع العدد المكتوب بخط اليد"
-                      referrerPolicy="no-referrer"
-                      className="max-h-16 w-auto mx-auto rounded border border-slate-200 bg-white object-contain"
-                    />
-                  </div>
-                )}
 
                 <div className="flex items-stretch gap-2">
                   <input
@@ -387,20 +342,6 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                   </label>
                   {renderConfidenceIndicator(documentItem.result.dateConfidence)}
                 </div>
-
-                {dateCropUrl && (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <div className="mb-1 text-[11px] text-slate-500">
-                      موضع التاريخ المكبّر من الصورة:
-                    </div>
-                    <img
-                      src={dateCropUrl}
-                      alt="موضع التاريخ المكتوب بخط اليد"
-                      referrerPolicy="no-referrer"
-                      className="max-h-16 w-auto mx-auto rounded border border-slate-200 bg-white object-contain"
-                    />
-                  </div>
-                )}
 
                 <div className="flex items-stretch gap-2">
                   <input

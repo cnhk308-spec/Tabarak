@@ -194,8 +194,7 @@ export const DocumentCanvas: React.FC<DocumentCanvasProps> = ({
     );
   }
 
-  const issueBox = documentItem.result?.issueNumberBox;
-  const dateBox = documentItem.result?.dateBox;
+  const regionBox = documentItem.result?.headerRegionBox || TOP_RIGHT_BOX;
 
   return (
     <div
@@ -370,61 +369,22 @@ export const DocumentCanvas: React.FC<DocumentCanvasProps> = ({
             className="block w-full h-auto"
           />
 
-          {/* Top-Right Scan Zone Reference Frame */}
-          {showBoxes && !cropMode && scanRegion === 'top-right' && (
+          {/* Single Large Upper-Right Reading Box (العدد والتاريخ معاً) */}
+          {showBoxes && !cropMode && (
             <div
               style={{
-                top: `${TOP_RIGHT_BOX.ymin / 10}%`,
-                left: `${TOP_RIGHT_BOX.xmin / 10}%`,
-                width: `${(TOP_RIGHT_BOX.xmax - TOP_RIGHT_BOX.xmin) / 10}%`,
-                height: `${(TOP_RIGHT_BOX.ymax - TOP_RIGHT_BOX.ymin) / 10}%`,
+                top: `${regionBox.ymin / 10}%`,
+                left: `${regionBox.xmin / 10}%`,
+                width: `${(regionBox.xmax - regionBox.xmin) / 10}%`,
+                height: `${(regionBox.ymax - regionBox.ymin) / 10}%`,
               }}
-              className="pointer-events-none absolute border border-dashed border-slate-400/80 bg-blue-500/[0.02]"
+              className="pointer-events-none absolute border-2 border-blue-800/80 bg-blue-700/[0.03]"
             >
               <span
                 dir="rtl"
-                className="absolute top-1.5 left-1.5 bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-medium text-white whitespace-nowrap"
+                className="absolute top-2 right-2 rounded bg-blue-900/90 px-2 py-0.5 text-[11px] font-semibold text-white shadow-xs whitespace-nowrap"
               >
-                نطاق الفحص (العلوي الأيمن)
-              </span>
-            </div>
-          )}
-
-          {/* Detected Bounding Box Overlays */}
-          {showBoxes && !cropMode && issueBox && (
-            <div
-              style={{
-                top: `${issueBox.ymin / 10}%`,
-                left: `${issueBox.xmin / 10}%`,
-                width: `${Math.max(2, (issueBox.xmax - issueBox.xmin) / 10)}%`,
-                height: `${Math.max(2, (issueBox.ymax - issueBox.ymin) / 10)}%`,
-              }}
-              className="pointer-events-none absolute border-2 border-blue-700 bg-blue-700/10"
-            >
-              <span
-                dir="rtl"
-                className="absolute -top-6 right-0 bg-blue-900 px-1.5 py-0.5 text-[10px] font-semibold text-white whitespace-nowrap"
-              >
-                العدد
-              </span>
-            </div>
-          )}
-
-          {showBoxes && !cropMode && dateBox && (
-            <div
-              style={{
-                top: `${dateBox.ymin / 10}%`,
-                left: `${dateBox.xmin / 10}%`,
-                width: `${Math.max(2, (dateBox.xmax - dateBox.xmin) / 10)}%`,
-                height: `${Math.max(2, (dateBox.ymax - dateBox.ymin) / 10)}%`,
-              }}
-              className="pointer-events-none absolute border-2 border-emerald-700 bg-emerald-700/10"
-            >
-              <span
-                dir="rtl"
-                className="absolute -bottom-6 right-0 bg-emerald-800 px-1.5 py-0.5 text-[10px] font-semibold text-white whitespace-nowrap"
-              >
-                التاريخ
+                منطقة القراءة (الجزء الأيمن: العدد والتاريخ)
               </span>
             </div>
           )}

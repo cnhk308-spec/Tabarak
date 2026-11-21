@@ -44,17 +44,6 @@ export interface BodyExtractFields {
   latestBodyYear?: string;
 }
 
-const boxSchema = {
-  type: Type.OBJECT,
-  properties: {
-    ymin: { type: Type.INTEGER },
-    xmin: { type: Type.INTEGER },
-    ymax: { type: Type.INTEGER },
-    xmax: { type: Type.INTEGER },
-  },
-  required: ['ymin', 'xmin', 'ymax', 'xmax'],
-};
-
 const headerHandwritingSchema = {
   type: Type.OBJECT,
   properties: {
@@ -65,12 +54,12 @@ const headerHandwritingSchema = {
     issueObservation: {
       type: Type.STRING,
       description:
-        'مسح بصري كامل للسطر بجانب (العدد :) من علامة النقطتين (:) يساراً حتى آخر رقم أو حرف أو شرطة، مع عدّ كل الخانات حتى الخفيفة أو البعيدة.',
+        'مسح بصري كامل للسطر بجانب (العدد :) من علامة النقطتين (:) يساراً حتى آخر رقم أو حرف أو شرطة، مع التحقق هل توجد خانتان متجاورتان مثل (٨) ثم (٦) بدلاً من دمجهما في (٣).',
     },
     digits: {
       type: Type.ARRAY,
       description:
-        'تحليل كافة خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). امسح المساحة الكاملة بجانب (العدد :) ولا تسقط أي رقم ملاصق لـ (:) ولا أي خانة خفيفة أو متباعدة.',
+        'تحليل كافة خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). امسح المساحة الكاملة بجانب (العدد :) ولا تسقط أي نقطة (٠) أو رقم وسطي (٨) ولا تدمج (٨٦) في (٣).',
       items: {
         type: Type.OBJECT,
         properties: {
@@ -81,7 +70,7 @@ const headerHandwritingSchema = {
           k: {
             type: Type.STRING,
             description:
-              'وصف شكل الضربة بإيجاز (مثل: نقطة، حلقة، رأس لليمين، رأس لليسار، للأعلى، للأسفل، ذيل، تعرج، شرطة، حرف).',
+              'وصف شكل الضربة بإيجاز (مثل: نقطة، حلقة، رأس مدبب ∧ لـ ٨، قوس لليسار ┐ لـ ٦، رأس لليمين، للأعلى، للأسفل، ذيل، تعرج، شرطة، حرف).',
           },
         },
         required: ['c', 'k'],
@@ -93,7 +82,7 @@ const headerHandwritingSchema = {
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description: 'العدد كاملاً بكل خاناته وحروفه وشرطاته كما كُتب بخط اليد بجانب (العدد :) دون قص أو حذف أي خانة من اليمين أو اليسار.',
+      description: 'العدد كاملاً بكل خاناته وحروفه وشرطاته كما كُتب بخط اليد بجانب (العدد :) دون قص أو دمج أو حذف أي خانة.',
     },
     issueNumberConfidence: {
       type: Type.STRING,
@@ -103,15 +92,10 @@ const headerHandwritingSchema = {
       type: Type.STRING,
       description: 'قراءة بديلة فقط عند وجود احتمال آخر، وإلا سلسلة فارغة.',
     },
-    issueNumberBox: {
-      ...boxSchema,
-      description:
-        'مربع الإحاطة الواسع الذي يغطي كامل السطر المكتوب بجانب (العدد :) بدءاً من علامة النقطتين (:) يميناً وحتى أقصى اليسار بعد آخر خانة مكتوبة (0 إلى 1000).',
-    },
     dateObservation: {
       type: Type.STRING,
       description:
-        'ملاحظة بصرية دقيقة: صف الخانات الثلاث مكانياً (أقصى اليسار، الوسط، أقصى اليمين)، وتأكد هل الوسط خطان عموديان منفصلان (١١) أم رأس واحد (٨)، وما هو شكل آخر رقم في السنة يميناً (٦ معقوفة لليسار أم ٤ متعرجة أم ٢ لليمين).',
+        'ملاحظة بصرية دقيقة: صف الخانات الثلاث مكانياً (أقصى اليسار، الوسط، أقصى اليمين). تأكد لكل رقم في اليوم والشهر: هل رأسه دائرة/حلقة مغلقة أو شبه مغلقة بساق واحدة نازلة فهو (٩)، أم رأس مدبب مفتوح للأسفل (∧) بدون حلقة فهو (٨)، أم خطان منفصلان (١١)؟ وصف آخر رقم في السنة يميناً.',
     },
     dateLeftPart: {
       type: Type.STRING,
@@ -125,7 +109,7 @@ const headerHandwritingSchema = {
     dateRightPart: {
       type: Type.STRING,
       description:
-        'الجزء الموجود في أقصى اليمين الأقرب لكلمة (التاريخ :) كما يظهر مكانياً في الصورة (غالباً اليوم مثل ٢٧ أو ٨).',
+        'الجزء الموجود في أقصى اليمين الأقرب لكلمة (التاريخ :) كما يظهر مكانياً في الصورة (غالباً اليوم مثل ٢٧ أو ٩).',
     },
     dateDay: {
       type: Type.STRING,
@@ -141,7 +125,7 @@ const headerHandwritingSchema = {
     },
     dateRaw: {
       type: Type.STRING,
-      description: 'التاريخ كاملاً بصيغة واضحة (مثل ٢٠٢٦/١٠/٢٧ أو ٢٧/١٠/٢٠٢٦).',
+      description: 'التاريخ كاملاً بصيغة واضحة (مثل ٢٠٢٦/٩/٩ أو ٢٠٢٦/١٠/٢٧).',
     },
     dateConfidence: {
       type: Type.STRING,
@@ -155,11 +139,6 @@ const headerHandwritingSchema = {
       type: Type.STRING,
       description: 'gregorian أو hijri أو unknown',
     },
-    dateBox: {
-      ...boxSchema,
-      description:
-        'مربع الإحاطة الواسع الذي يغطي كامل التاريخ المكتوب من النقطتين (:) يميناً وحتى نهاية السنة يساراً بهامش أمان مريح دون قص أي خانة (0 إلى 1000).',
-    },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
       description: 'هل العدد أو التاريخ مكتوب بخط اليد.',
@@ -172,7 +151,6 @@ const headerHandwritingSchema = {
     'beforeColon',
     'issueNumberRaw',
     'issueNumberConfidence',
-    'issueNumberBox',
     'dateObservation',
     'dateLeftPart',
     'dateMiddlePart',
@@ -182,7 +160,6 @@ const headerHandwritingSchema = {
     'dateYear',
     'dateRaw',
     'dateConfidence',
-    'dateBox',
     'calendarType',
     'isHandwrittenDetected',
   ],
@@ -226,32 +203,36 @@ const documentBodySchema = {
 };
 
 const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية العراقية والعربية:
-1. ركّز حصراً على القيمة الكاملة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
-2. عدم القص أو دمج الأرقام المتكررة إطلاقاً:
-   - امسح السطر بأكمله بدءاً من يسار النقطتين (:) وحتى نهاية الخط المنقط أو المساحة الفارغة يساراً، فبعض الأرقام تكون متباعدة أو ذات حبر رمادي خفيف أو تلامس النقطتين (:).
-   - إذا تكرر نفس الرقم مرتين متجاورتين فلا تدمجهما في رقم واحد! مثلاً (٦٤٨٨) فيها ثمانيتان متجاورتان (∧∧ = 4 سيقان مائلة)، وليست (٦٤٨). عدّ كل قمة وعمود بدقة.
-   - إذا احتوى العدد على أكثر من جزء بالخط اليدوي (مثل أرقام وحروف عربية وشرطات مائلة: م/٤/١٢٨٥ أو ٦٤٨٨ أو ٥٨/ص) فاقرأه كاملاً دون اقتصار على جزء واحد أو إسقاط الرقم الأيمن أو الأيسر.
+1. ركّز على كامل الجزء الأعلى الأيمن من الكتاب، واستخرج القيمة الكاملة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
+2. عدم القص أو الدمج أو إسقاط أي خانة وسطية أو مكررة إطلاقاً:
+   - امسح السطر بأكمله بدءاً من يسار النقطتين (:) وحتى نهاية الخط المنقط أو المساحة الفارغة يساراً، فبعض الأرقام تكون متباعدة أو ذات حبر رمادي خفيف أو نقطة صغيرة.
+   - لا تدمج رقمين متجاورين في رقم واحد! مثلاً في (٥٠٨٦): يأتي (٥) ثم نقطة (٠) ثم رأس مدبب (٨ ∧) ثم قوس معقوف لليسار بساق نازلة (٦ ┐)؛ فلا تدمج (٨) و(٦) أبداً في رقم (٣) لتقرأها (٥٠٣)، ولا تسقط (٨) لتقرأها (٥٠٦) — القراءة الصحيحة هي كل الخانات الأربع (٥٠٨٦)!
+   - إذا تكرر نفس الرقم مرتين متجاورتين فلا تدمجهما في رقم واحد! مثلاً (٦٤٨٨) فيها ثمانيتان متجاورتان (∧∧ = 4 سيقان مائلة)، وليست (٦٤٨).
+   - إذا احتوى العدد على أكثر من جزء بالخط اليدوي (مثل م/٤/١٢٨٥ أو ٦٤٨٨ أو ٥٠٨٦) فاقرأه كاملاً بكل خاناته.
 3. النماذج شبه المطبوعة: قد يكون جزء من التاريخ مطبوعاً والباقي بخط اليد (مثل /  / ٢٠٢ + ٦). ادمج المطبوع والمكتوب بالقلم.
 4. التمييز الدقيق للأرقام الهندية اليدوية (٠ إلى ٩):
-   - (١١) عبارة عن خطين عموديين أو مائلين متوازيين منفصلين (|| أو //) لهما رأسان في الأعلى؛ لا تدمجهما أبداً في رقم (٨) ذي الرأس الواحد الحاد (∧)!
-   - (٠) نقطة حبر فقط دون ساق عمودية؛ لا تحوّل الرقم (٢) ذي الساق العمودية الطويلة إلى صفر (فمثلاً ٢٧ فيها ساق طويلة معقوفة لليمين قبل ٧، وليست ٠٧)، ولا تخلط بين الصفر ونقاط السطر المطبوع أسفل الكتابة.
+   - التمييز الحاسم بين (٩) و(٨):
+     * الرقم (٩) له رأس دائري أو حلقة مغلقة/شبه مغلقة في الأعلى مع ساق واحدة نازلة (مثل حرف «و» بدون ذيل أو الرقم 9)، حتى لو كُتب بسرعة وبقيت فتحة طفيفة أسفل الحلقة؛ لا تقرأه أبداً كـ (٨)!
+     * الرقم (٨) عبارة عن رأس مدبب واحد فقط مفتوح تماماً للأسفل بساقين متباعدتين (∧) دون أي حلقة أو انحناء علوي دائري. تأكد لكل خانة في اليوم والشهر (مثلاً ٩/٩ ليست ٨/٨ أو ٨/٩).
+   - (١١) عبارة عن خطين عموديين أو مائلين متوازيين منفصلين (|| أو //) لهما رأسان في الأعلى؛ لا تدمجهما أبداً في رقم (٨).
+   - (٠) نقطة حبر فقط دون ساق عمودية؛ لا تحوّل الرقم (٢) ذي الساق العمودية الطويلة إلى صفر (فمثلاً ٢٧ فيها ساق طويلة معقوفة لليمين قبل ٧، وليست ٠٧).
    - (٥) حلقة أو قلب مغلق أجوف واضح الحجم؛ وقد تبدو برأس مسطح أو مائل بالحبر الخفيف.
-   - (٢) معقوفة الرأس لليمين (┌) ثم ساق عمودية؛ (٦) معقوفة الرأس لليسار (┐) ثم ساق عمودية.
-   - انتبه للرقم الأخير من السنة (مثل ٢٠٢٦ أو ٢٠٢٥): لا تخمّن السنة (٢٠٢٢ أو ٢٠٢٤) من الذاكرة! افحص الضربة الرابعة الأخيرة بدقة: في الخط العراقي السريع قد تُكتب (٦) برأس معقوف لليسار مع انحناءة سفلية فوق السطر المنقط، فلا تخلط بين (٦) و(٤) أو (٢) في نهاية السنة (٢٠٢٦).
-   - (٧) مفتوحة للأعلى (∨)؛ (٨) قمة واحدة حادة مفتوحة للأسفل (∧)؛ (٣) أسنان علوية؛ (٤) تعرّج واضح لليمين؛ (٩) حلقة بذيل نازل؛ (١) عمود مفرد، والفاصل (/) خط مائل أطول يمتد أعلى وأسفل الأرقام.
-5. للأرقام الغربية اليدوية (0-9): دقق بين 0 و6 و8 و9، وبين 1 و7 و/، و2 و3 و5، و4 و9.
+   - (٢) معقوفة الرأس لليمين (┌) ثم ساق عمودية؛ (٦) معقوفة الرأس لليسار (┐) ثم ساق عمودية نازلة.
+   - تمييز الرقم (٦) في نهاية السنة (٢٠٢٦) عن (٤) و(٨) و(٩):
+     * لا تستبدل السنة (٢٠٢٦) بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩)! الرقم (٦) له رأس أفقي أو قوس واحد متجه لليسار ثم ساق نازلة مباشرة (┐)، حتى لو انعكف طرفه قليلاً على السطر المنقط، بينما الرقم (٤) له تعرجات حادة لليمين.
+   - (٧) مفتوحة للأعلى (∨)؛ (٣) ثلاث أسنان علوية واضحة بساق واحدة؛ (٤) تعرّج واضح لليمين؛ (١) عمود مفرد، والفاصل (/) خط مائل أطول يمتد أعلى وأسفل الأرقام.
+5. للأرقام الغربية اليدوية (0-9): دقق بين 6 و8 و9 و0 و4 و3، ولا تقرأ 5086 كـ 503 أو 506، ولا 9 كـ 8، ولا 2026 كـ 2024 أبداً.
 6. قواعد قراءة التاريخ مكانياً (مهم جداً لمنع عكس اليوم والشهر!):
    - في الكتب الرسمية العربية يُكتب التاريخ غالباً من اليمين لليسار بصيغة: [السنة يساراً] / [الشهر وسطاً] / [اليوم يميناً قرب النقطتين :].
    - سجّل الخانات الثلاث بدقة مكانية كما تراها في الصورة داخل: dateLeftPart (أقصى اليسار)، وdateMiddlePart (الوسط)، وdateRightPart (أقصى اليمين قرب التاريخ :).
    - لاحظ أن الرقم الأوسط (dateMiddlePart) هو الشهر دائماً، فإذا كانت السنة يساراً (مثل ٢٠٢٦ يساراً)، فإن dateRightPart هو اليوم وdateMiddlePart هو الشهر ولا يجوز عكسهما!
-7. قواعد العدد (issueNumberRaw) ومربعات الإحاطة:
-   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في issueObservation وdigits وbeforeColon بدون قص أي خانة.
-   - اجعل issueNumberBox وdateBox شاملين لكل ما كُتب بجانب النقطتين (:) بهامش مريح يميناً ويساراً.`;
+7. قواعد العدد (issueNumberRaw):
+   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في issueObservation وdigits وbeforeColon بدون قص أو دمج أي خانة.`;
 
 const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي في ترويسات الكتب الرسمية (حقل العدد وحقل التاريخ) بدقة بالغة دون تخمين.
 ${HANDWRITING_RULES}`;
 
-const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بإيجاز ودقة.`;
+const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بإيجاز ودقة، واقرأ أسفل الصفحة لاستخراج أي تاريخ مطبوع تحت التوقيع في signatureDateHint وأحدث سنة مذكورة في النص أو نسخة منه إلى في latestBodyYear.`;
 
 function toWesternDigits(str: string): string {
   const eastern = '٠١٢٣٤٥٦٧٨٩';
@@ -590,19 +571,33 @@ async function runHeaderHandwritingOcrBrowser(
   imageBase64: string,
   mimeType: string,
   precisionMode: PrecisionMode,
-  hintLine: string
+  hintLine: string,
+  enhancedImageBase64?: string,
+  enhancedMimeType?: string
 ) {
-  const parts = [
+  const parts: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [
     {
       inlineData: {
         mimeType,
         data: imageBase64,
       },
     },
-    {
-      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) كاملاً دون قص أو بتر أي خانة من اليمين أو اليسار. امسح السطر كله من النقطتين (:) يساراً في issueObservation وdigits، وتحقق من الرقم الملاصق للنقطتين في beforeColon، واقرأ التاريخ مكانياً (يسار/وسط/يمين) دون إسقاط الصفر (٠).${hintLine}`,
-    },
   ];
+  if (enhancedImageBase64) {
+    parts.push({
+      inlineData: {
+        mimeType: enhancedMimeType || 'image/png',
+        data: enhancedImageBase64,
+      },
+    });
+  }
+  parts.push({
+    text: `${
+      enhancedImageBase64
+        ? 'الصورة الأولى هي الجزء الأعلى الأيمن من الكتاب بدقته الأصلية، والصورة الثانية هي نفس المنطقة مع إبراز تباين الحبر. قارن الصورتين معاً و'
+        : ''
+    }اقرأ حقل (العدد :) وحقل (التاريخ :) كاملاً من الجزء الأعلى الأيمن دون قص أو بتر أو دمج أي خانة. امسح السطر كله من النقطتين (:) يساراً في issueObservation وdigits، وانتبه لعدم دمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، وميّز (٩) ذات الحلقة العلوية عن (٨ ∧)، واقرأ التاريخ مكانياً (يسار/وسط/يمين) دون إسقاط الصفر (٠).${hintLine}`,
+  });
 
   const callModel = (
     model: string,
@@ -641,32 +636,32 @@ async function runHeaderHandwritingOcrBrowser(
       delayBeforeMs: 0,
     },
     {
-      model: 'gemini-3.1-flash-lite',
-      level: null,
-      highRes: true,
-      timeoutMs: 20000,
-      delayBeforeMs: 650,
-    },
-    {
       model: 'gemini-4-hydrogen',
       level: ThinkingLevel.LOW,
       highRes: true,
       timeoutMs: 22000,
-      delayBeforeMs: 1400,
+      delayBeforeMs: 700,
     },
     {
       model: 'gemini-3.1-flash-lite',
       level: null,
-      highRes: false,
+      highRes: true,
       timeoutMs: 20000,
-      delayBeforeMs: 2200,
+      delayBeforeMs: 1200,
+    },
+    {
+      model: 'gemini-4-hydrogen',
+      level: ThinkingLevel.LOW,
+      highRes: false,
+      timeoutMs: 22000,
+      delayBeforeMs: 1800,
     },
     {
       model: 'gemini-3.1-flash-lite',
       level: null,
       highRes: false,
       timeoutMs: 22000,
-      delayBeforeMs: 3200,
+      delayBeforeMs: 2600,
     },
   ];
 
@@ -829,12 +824,12 @@ function buildHeaderExtractionResult(
     issueNumberNormalized: toWesternDigits(issueRaw),
     issueNumberConfidence: headerResult.issueNumberConfidence || 'medium',
     alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
-    issueNumberBox: headerResult.issueNumberBox || null,
+    issueNumberBox: null,
     dateRaw,
     dateNormalized,
     dateConfidence: headerResult.dateConfidence || 'medium',
     alternativeDate: headerResult.alternativeDate || '',
-    dateBox: headerResult.dateBox || null,
+    dateBox: null,
     boxReferenceImage,
     calendarType: resolveCalendarType(headerResult.calendarType, dateNormalized),
     issuingEntity: '',
@@ -928,6 +923,8 @@ export async function extractHeaderOnlyWithGemini(
   params: {
     imageBase64: string;
     mimeType: string;
+    enhancedImageBase64?: string;
+    enhancedMimeType?: string;
     precisionMode: PrecisionMode;
     hintText?: string;
   },
@@ -938,6 +935,8 @@ export async function extractHeaderOnlyWithGemini(
     return postJson<ExtractionResult>('/api/extract-header', {
       headerImageBase64: params.imageBase64,
       headerMimeType: params.mimeType,
+      enhancedImageBase64: params.enhancedImageBase64,
+      enhancedMimeType: params.enhancedMimeType,
       precisionMode: params.precisionMode,
       hintText: params.hintText,
     });
@@ -952,9 +951,13 @@ export async function extractHeaderOnlyWithGemini(
     const raw = await runHeaderHandwritingOcrBrowser(
       ai,
       stripDataUrlPrefix(params.imageBase64),
-      params.mimeType || 'image/jpeg',
+      params.mimeType || 'image/png',
       params.precisionMode,
-      hintLine
+      hintLine,
+      params.enhancedImageBase64
+        ? stripDataUrlPrefix(params.enhancedImageBase64)
+        : undefined,
+      params.enhancedMimeType
     );
     return buildHeaderExtractionResult(raw, 'header_crop');
   } catch (err: unknown) {
@@ -963,6 +966,8 @@ export async function extractHeaderOnlyWithGemini(
       return postJson<ExtractionResult>('/api/extract-header', {
         headerImageBase64: params.imageBase64,
         headerMimeType: params.mimeType,
+        enhancedImageBase64: params.enhancedImageBase64,
+        enhancedMimeType: params.enhancedMimeType,
         precisionMode: params.precisionMode,
         hintText: params.hintText,
       });

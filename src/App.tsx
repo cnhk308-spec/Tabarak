@@ -34,7 +34,6 @@ import {
   saveDirectoryHandle,
 } from './utils/folderScanner';
 import {
-  TOP_HEADER_BOX,
   TOP_RIGHT_BOX,
   compressImageDataUrl,
   convertToEasternDigits,
@@ -42,7 +41,6 @@ import {
   cropRegionDataUrl,
   enhanceHandwritingCropDataUrl,
   enhanceInkContrastDataUrl,
-  expandBoundingBox,
   generateSampleOfficialLetterFile,
   loadImageFile,
   rotateImageDataUrl,
@@ -57,32 +55,6 @@ function formatExtractedValue(
   if (pref === 'raw') return raw || normalized || '';
   if (pref === 'eastern') return convertToEasternDigits(base);
   return convertToWesternDigits(base);
-}
-
-function clampValidBox(box: BoundingBox | null | undefined): BoundingBox | null {
-  if (!box) return null;
-  const ymin = Math.max(0, Math.min(999, Math.round(box.ymin)));
-  const xmin = Math.max(0, Math.min(999, Math.round(box.xmin)));
-  const ymax = Math.max(1, Math.min(1000, Math.round(box.ymax)));
-  const xmax = Math.max(1, Math.min(1000, Math.round(box.xmax)));
-  if (xmax - xmin < 8 || ymax - ymin < 6) return null;
-  return { ymin, xmin, ymax, xmax };
-}
-
-function mapCroppedBoxToFullImage(
-  innerBox: BoundingBox | null | undefined,
-  cropBox: BoundingBox
-): BoundingBox | null {
-  const valid = clampValidBox(innerBox);
-  if (!valid) return null;
-  const cropW = cropBox.xmax - cropBox.xmin;
-  const cropH = cropBox.ymax - cropBox.ymin;
-  return clampValidBox({
-    xmin: cropBox.xmin + (valid.xmin / 1000) * cropW,
-    xmax: cropBox.xmin + (valid.xmax / 1000) * cropW,
-    ymin: cropBox.ymin + (valid.ymin / 1000) * cropH,
-    ymax: cropBox.ymin + (valid.ymax / 1000) * cropH,
-  });
 }
 
 function extractYearNumber(value?: string): number | null {
@@ -114,6 +86,17 @@ function isTransientExtractionError(err: unknown): boolean {
   );
 }
 
+function isCharacterSubsequence(shorter: string, longer: string): boolean {
+  if (!shorter || shorter.length >= longer.length) return false;
+  let sIdx = 0;
+  for (let lIdx = 0; lIdx < longer.length && sIdx < shorter.length; lIdx++) {
+    if (shorter[sIdx] === longer[lIdx]) {
+      sIdx++;
+    }
+  }
+  return sIdx === shorter.length;
+}
+
 function reconcileZoomedHeaderResult(
   prev: ExtractionResult,
   zoomIssue: ExtractionResult | null,
@@ -125,19 +108,17 @@ function reconcileZoomedHeaderResult(
   const zoomedIssueRaw = (zoomIssue?.issueNumberRaw || '').trim();
   if (zoomIssue && zoomedIssueRaw) {
     const prevRaw = prev.issueNumberRaw || '';
-    const prevNormLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
-    const zoomNormLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
-    const zoomIsShorterPrefixOfPrev =
-      prevNormLen > zoomNormLen &&
-      convertToWesternDigits(prevRaw)
-        .replace(/\s+/g, '')
-        .includes(convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, ''));
+    const prevCompact = convertToWesternDigits(prevRaw).replace(/\s+/g, '');
+    const zoomCompact = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '');
+    const zoomMissedCharsFromPrev =
+      prevCompact.length > zoomCompact.length &&
+      isCharacterSubsequence(zoomCompact, prevCompact);
 
     if (zoomedIssueRaw !== prevRaw) {
       if (
         (zoomIssue.issueNumberConfidence === 'low' &&
           prev.issueNumberConfidence === 'high') ||
-        (zoomIsShorterPrefixOfPrev && prev.issueNumberConfidence !== 'low')
+        (zoomMissedCharsFromPrev && prev.issueNumberConfidence !== 'low')
       ) {
         next.alternativeIssueNumber = zoomedIssueRaw;
       } else {
@@ -288,31 +269,29 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 1100,
-            maxDim: 1750,
-            format: 'image/jpeg',
-            quality: 0.98,
+            minDim: 1500,
+            maxDim: 2200,
+            format: 'image/png',
             contrastFilter: false,
           });
-          resolvedMimeType = 'image/jpeg';
+          resolvedMimeType = 'image/png';
           isCropped = true;
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
-          const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1100, 0.78),
-            cropRegionDataUrl(imageDataUrl, TOP_HEADER_BOX, 0, {
-              minDim: 1150,
-              maxDim: 1800,
-              format: 'image/jpeg',
-              quality: 0.98,
+          const [compressedFull, topRightPng] = await Promise.all([
+            compressImageDataUrl(imageDataUrl, 1550, 0.86),
+            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              minDim: 1500,
+              maxDim: 2200,
+              format: 'image/png',
               contrastFilter: false,
             }),
           ]);
           payloadDataUrl = compressedFull;
           resolvedMimeType = 'image/jpeg';
-          headerImageBase64 = headerJpeg;
-          headerMimeType = 'image/jpeg';
-          headerBoxOrigin = TOP_HEADER_BOX;
+          headerImageBase64 = topRightPng;
+          headerMimeType = 'image/png';
+          headerBoxOrigin = TOP_RIGHT_BOX;
         }
 
         if (options?.applyContrast) {
@@ -324,27 +303,17 @@ export default function App() {
           resolvedMimeType = 'image/jpeg';
         }
 
-        const mapResultBoxes = (res: ExtractionResult): ExtractionResult => {
-          const boxOrigin =
+        const mapResultBoxes = (res: ExtractionResult): ExtractionResult => ({
+          ...res,
+          issueNumberBox: null,
+          dateBox: null,
+          headerRegionBox:
             isCropped && originBox
               ? originBox
-              : headerBoxOrigin && res.boxReferenceImage !== 'full_image'
-              ? headerBoxOrigin
-              : null;
-
-          if (boxOrigin) {
-            return {
-              ...res,
-              issueNumberBox: mapCroppedBoxToFullImage(res.issueNumberBox, boxOrigin),
-              dateBox: mapCroppedBoxToFullImage(res.dateBox, boxOrigin),
-            };
-          }
-          return {
-            ...res,
-            issueNumberBox: clampValidBox(res.issueNumberBox),
-            dateBox: clampValidBox(res.dateBox),
-          };
-        };
+              : res.boxReferenceImage === 'full_image'
+              ? { ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 }
+              : headerBoxOrigin || TOP_RIGHT_BOX,
+        });
 
         const expectsBody = effectiveRegion === 'full' && !isCropped;
         let ultraZoomPromise: Promise<void> | null = null;
@@ -359,17 +328,6 @@ export default function App() {
           editedDate: '',
         };
 
-        const cropZoomRegion = async (box: BoundingBox) => {
-          const expanded = expandBoundingBox(box, 185, 230, 72, 72);
-          const rawCrop = await cropRegionDataUrl(imageDataUrl, expanded, 0, {
-            minDim: 1200,
-            maxDim: 1850,
-            format: 'image/png',
-            contrastFilter: false,
-          });
-          return options?.applyContrast ? enhanceHandwritingCropDataUrl(rawCrop) : rawCrop;
-        };
-
         const runZoomVerify = async (
           sourceHeader: ExtractionResult,
           cfg: {
@@ -380,92 +338,58 @@ export default function App() {
             forceDateOverride?: boolean;
           }
         ) => {
-          const ib = cfg.verifyIssue ? sourceHeader.issueNumberBox : null;
-          const db = cfg.verifyDate ? sourceHeader.dateBox : null;
-          if (!ib && !db) return;
+          if (!cfg.verifyIssue && !cfg.verifyDate) return;
 
-          const effectiveZoomMode: PrecisionMode = cfg.zoomPrecision ?? mode;
-          let zoomIssueRes: ExtractionResult | null = null;
-          let zoomDateRes: ExtractionResult | null = null;
+          const effectiveZoomMode: PrecisionMode = cfg.zoomPrecision ?? 'ultra';
           const baseHint = hintText ? `${hintText} — ` : '';
           const strokeHint =
-            'عدّ كل خانة بدقة ولا تدمج الأرقام المتكررة مثل ٨٨ في ٦٤٨٨، وميّز الخطين المتوازيين (١١) عن رقم (٨) ذي الرأس الواحد، وافحص الرقم الأخير من السنة (مثل ٢٠٢٦) بدون تخمين.';
+            'اقرأ كامل الجزء الأعلى الأيمن من الورقة بالكامل دون قص أو تحديد بمربعات ضيقة. دقق في كل ضربة قلم: لا تدمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، ولا تسقط الصفر (٠) أو الرقم الوسطي، وميّز الرقم (٩) ذي الحلقة العلوية عن (٨ ∧)، وتأكد من (٦) في نهاية (٢٠٢٦) دون استبدالها بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).';
 
-          if (ib && db) {
-            const unionBox: BoundingBox = {
-              xmin: Math.min(ib.xmin, db.xmin),
-              ymin: Math.min(ib.ymin, db.ymin),
-              xmax: Math.max(ib.xmax, db.xmax),
-              ymax: Math.max(ib.ymax, db.ymax),
-            };
-            const unionCompact =
-              unionBox.xmax - unionBox.xmin <= 820 &&
-              unionBox.ymax - unionBox.ymin <= 460;
+          let verifyImg = payloadDataUrl;
+          let verifyMime = resolvedMimeType;
 
-            if (unionCompact) {
-              const stripImg = await cropZoomRegion(unionBox);
-              const combined = await extractHeaderOnlyWithGemini(
-                {
-                  imageBase64: stripImg,
-                  mimeType: 'image/png',
-                  precisionMode: effectiveZoomMode,
-                  hintText: `${baseHint}لقطة مكبّرة عالية الدقة للعدد والتاريخ بخط اليد. ${strokeHint} اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
-                },
-                apiKey
-              );
-              zoomIssueRes = combined;
-              zoomDateRes = combined;
+          if (!isCropped && sourceHeader.boxReferenceImage !== 'full_image') {
+            if (headerImageBase64 && headerBoxOrigin === TOP_RIGHT_BOX) {
+              verifyImg = headerImageBase64;
+              verifyMime = headerMimeType || 'image/png';
             } else {
-              const [issueCrop, dateCrop] = await Promise.all([
-                cropZoomRegion(ib),
-                cropZoomRegion(db),
-              ]);
-              const [issueOnly, dateOnly] = await Promise.all([
-                extractHeaderOnlyWithGemini(
-                  {
-                    imageBase64: issueCrop,
-                    mimeType: 'image/png',
-                    precisionMode: effectiveZoomMode,
-                    hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:)، ولا تدمج الأرقام المتكررة مثل ٨٨.`,
-                  },
-                  apiKey
-                ),
-                extractHeaderOnlyWithGemini(
-                  {
-                    imageBase64: dateCrop,
-                    mimeType: 'image/png',
-                    precisionMode: effectiveZoomMode,
-                    hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. ${strokeHint} اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
-                  },
-                  apiKey
-                ),
-              ]);
-              zoomIssueRes = issueOnly;
-              zoomDateRes = dateOnly;
+              const rawTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+                minDim: 1500,
+                maxDim: 2200,
+                format: 'image/png',
+                contrastFilter: false,
+              });
+              if (options?.applyContrast) {
+                verifyImg = await enhanceInkContrastDataUrl(rawTopRight);
+                verifyMime = 'image/jpeg';
+              } else {
+                verifyImg = rawTopRight;
+                verifyMime = 'image/png';
+              }
             }
-          } else if (ib) {
-            const issueCrop = await cropZoomRegion(ib);
-            zoomIssueRes = await extractHeaderOnlyWithGemini(
-              {
-                imageBase64: issueCrop,
-                mimeType: 'image/png',
-                precisionMode: effectiveZoomMode,
-                hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:)، ولا تدمج الأرقام المتكررة مثل ٨٨.`,
-              },
-              apiKey
-            );
-          } else if (db) {
-            const dateCrop = await cropZoomRegion(db);
-            zoomDateRes = await extractHeaderOnlyWithGemini(
-              {
-                imageBase64: dateCrop,
-                mimeType: 'image/png',
-                precisionMode: effectiveZoomMode,
-                hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. ${strokeHint} اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
-              },
-              apiKey
-            );
           }
+
+          let enhancedVerifyImg: string | undefined;
+          try {
+            enhancedVerifyImg = await enhanceHandwritingCropDataUrl(verifyImg);
+          } catch {
+            enhancedVerifyImg = undefined;
+          }
+
+          const combined = await extractHeaderOnlyWithGemini(
+            {
+              imageBase64: verifyImg,
+              mimeType: verifyMime,
+              enhancedImageBase64: enhancedVerifyImg,
+              enhancedMimeType: enhancedVerifyImg ? 'image/png' : undefined,
+              precisionMode: effectiveZoomMode,
+              hintText: `${baseHint}قراءة كاملة وعالية الدقة للجزء الأعلى الأيمن من الورقة تضم الترويسة والعدد والتاريخ معاً. ${strokeHint} اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
+            },
+            apiKey
+          );
+
+          const zoomIssueRes: ExtractionResult | null = cfg.verifyIssue ? combined : null;
+          const zoomDateRes: ExtractionResult | null = cfg.verifyDate ? combined : null;
 
           if (isStale()) return;
 
@@ -567,14 +491,23 @@ export default function App() {
                 headerMapped.dateNormalized || ''
               );
               const isHandwritten = Boolean(headerMapped.isHandwrittenDetected);
+              const detectedHeaderYear = extractYearNumber(
+                headerMapped.dateNormalized || headerMapped.dateRaw
+              );
+              const currCalYear = new Date().getFullYear();
+              const hasYearDeviation =
+                isHandwritten &&
+                detectedHeaderYear !== null &&
+                detectedHeaderYear !== currCalYear;
+
               const needsZoomVerify =
-                !isCropped &&
-                Boolean(headerMapped.issueNumberBox || headerMapped.dateBox) &&
+                (!isCropped || originBox === TOP_RIGHT_BOX) &&
                 (mode === 'ultra' ||
                   isHandwritten ||
                   headerMapped.issueNumberConfidence !== 'high' ||
                   headerMapped.dateConfidence !== 'high' ||
-                  !hasValidDateFormat);
+                  !hasValidDateFormat ||
+                  hasYearDeviation);
 
               if (needsZoomVerify) {
                 ultraZoomPromise = runZoomVerify(headerMapped, {
@@ -586,8 +519,12 @@ export default function App() {
                     mode === 'ultra' ||
                     isHandwritten ||
                     headerMapped.dateConfidence !== 'high' ||
-                    !hasValidDateFormat,
-                  zoomPrecision: mode,
+                    !hasValidDateFormat ||
+                    hasYearDeviation,
+                  zoomPrecision:
+                    mode === 'ultra' || isHandwritten || hasYearDeviation
+                      ? 'ultra'
+                      : mode,
                 }).catch(() => {
                   // Keep initial header reading if zoomed verification fails
                 });
@@ -626,15 +563,17 @@ export default function App() {
         }
         if (isStale()) return null;
 
-        // Post-body cross-check: catch misread handwritten years (e.g. 2024/2022 vs printed 2026)
+        // Post-body cross-check: catch misread handwritten years (e.g. 2024/2022/2028/2029 vs 2026)
         const currentHeaderSnap = tracker.headerResult ?? mappedFull;
         const headerYear = extractYearNumber(
           currentHeaderSnap.dateNormalized || currentHeaderSnap.dateRaw
         );
         const sigYear = extractYearNumber(mappedFull.signatureDateHint);
         const bodyYear = extractYearNumber(mappedFull.latestBodyYear);
+        const currentCalendarYear = new Date().getFullYear();
 
         let expectedRefYear: number | null = null;
+        let provenYear: number | null = null;
         if (
           sigYear &&
           headerYear &&
@@ -642,29 +581,110 @@ export default function App() {
           sigYear !== headerYear
         ) {
           expectedRefYear = sigYear;
+          provenYear = sigYear;
         } else if (
           bodyYear &&
           headerYear &&
           isSameCalendarEra(bodyYear, headerYear) &&
-          headerYear < bodyYear &&
-          bodyYear - headerYear <= 15
+          ((headerYear < bodyYear && bodyYear - headerYear <= 15) ||
+            (headerYear > currentCalendarYear && bodyYear <= currentCalendarYear))
         ) {
           expectedRefYear = bodyYear;
+          provenYear = bodyYear;
+        } else if (
+          headerYear &&
+          headerYear >= 1900 &&
+          headerYear > currentCalendarYear &&
+          headerYear - currentCalendarYear <= 10
+        ) {
+          expectedRefYear = currentCalendarYear;
         }
 
-        if (expectedRefYear && !isCropped && currentHeaderSnap.dateBox) {
+        if (expectedRefYear && !isCropped) {
           try {
             await runZoomVerify(currentHeaderSnap, {
               verifyIssue: false,
               verifyDate: true,
               zoomPrecision: 'ultra',
-              extraDateHint: `السنة الظاهرة أسفل التوقيع أو في متن الكتاب هي (${expectedRefYear})، بينما القراءة الأولية أعطت (${headerYear}). دقق جيداً في آخر رقمين من السنة المكتوبة بخط اليد ولا تخلط بين ٦ و ٤ أو ٢، وسجل اليوم والشهر والسنة بدقة مكانية.`,
+              extraDateHint: `السنة المتوقعة للكتاب هي (${expectedRefYear}) وفق التوقيع/المتن أو السنة الحالية، بينما القراءة الأولية أعطت (${headerYear}). دقق جيداً في الرقم الأخير من السنة المكتوبة بخط اليد ولا تستبدل (٢٠٢٦) أبداً بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩)، وسجل اليوم والشهر والسنة بدقة مكانية.`,
               forceDateOverride: true,
             });
           } catch {
             // Keep existing reading if post-body year verification fails
           }
           if (isStale()) return null;
+
+          // Hard safety alignment when printed signature/body dates explicitly prove a newer/exact year
+          if (provenYear) {
+            const afterSnap = tracker.headerResult ?? mappedFull;
+            const afterNorm = afterSnap.dateNormalized || '';
+            const afterRaw = afterSnap.dateRaw || '';
+            const afterYear = extractYearNumber(afterNorm || afterRaw);
+            const stillContradictsSig =
+              sigYear !== null &&
+              provenYear === sigYear &&
+              afterYear !== null &&
+              isSameCalendarEra(sigYear, afterYear) &&
+              afterYear !== sigYear;
+            const stillContradictsBody =
+              bodyYear !== null &&
+              provenYear === bodyYear &&
+              afterYear !== null &&
+              isSameCalendarEra(bodyYear, afterYear) &&
+              ((afterYear < bodyYear && bodyYear - afterYear <= 15) ||
+                (afterYear > currentCalendarYear && bodyYear <= currentCalendarYear));
+
+            if ((stillContradictsSig || stillContradictsBody) && afterYear) {
+              const updatedNorm = afterNorm
+                ? afterNorm.replace(
+                    new RegExp(`\\b${afterYear}\\b`),
+                    String(provenYear)
+                  )
+                : '';
+              const updatedRaw = afterRaw
+                ? convertToWesternDigits(afterRaw).replace(
+                    new RegExp(`\\b${afterYear}\\b`),
+                    String(provenYear)
+                  )
+                : '';
+
+              if (
+                (updatedNorm && updatedNorm !== afterNorm) ||
+                (updatedRaw && updatedRaw !== afterRaw)
+              ) {
+                const alignedHeader: ExtractionResult = {
+                  ...afterSnap,
+                  dateRaw: updatedRaw || afterRaw,
+                  dateNormalized: updatedNorm || afterNorm,
+                  dateConfidence: 'medium',
+                  alternativeDate: afterNorm || afterRaw || afterSnap.alternativeDate || '',
+                };
+                tracker.headerResult = alignedHeader;
+                tracker.editedDate = formatExtractedValue(
+                  alignedHeader.dateRaw,
+                  alignedHeader.dateNormalized,
+                  digitPreference
+                );
+                setDocuments((prev) =>
+                  prev.map((d) => {
+                    if (d.id !== docId || !d.result || d.userVerified) return d;
+                    const alignedDocResult: ExtractionResult = {
+                      ...d.result,
+                      dateRaw: alignedHeader.dateRaw,
+                      dateNormalized: alignedHeader.dateNormalized,
+                      dateConfidence: alignedHeader.dateConfidence,
+                      alternativeDate: alignedHeader.alternativeDate,
+                    };
+                    return {
+                      ...d,
+                      result: alignedDocResult,
+                      editedDate: tracker.editedDate,
+                    };
+                  })
+                );
+              }
+            }
+          }
         }
 
         const durationMs = Math.round(performance.now() - startedAt);
