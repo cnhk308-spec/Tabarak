@@ -90,28 +90,43 @@ const headerHandwritingSchema = {
     },
     issueNumberBox: {
       ...boxSchema,
-      description: 'مربع الإحاطة لقيمة العدد المكتوبة فقط (0 إلى 1000).',
+      description:
+        'مربع الإحاطة الشامل لكامل قيمة العدد المكتوبة فقط مع هامش أمان يشمل الرقم الملاصق للنقطتين (:) يميناً وآخر خانة يساراً (0 إلى 1000).',
     },
     dateObservation: {
       type: Type.STRING,
       description:
-        'ملاحظة بصرية قصيرة عن خانات التاريخ: اليوم، الشهر، السنة، وهل بعض أرقام السنة مطبوع مثل (٢٠٢) والباقي بخط اليد.',
+        'ملاحظة بصرية قصيرة: صف الخانات الثلاث مكانياً (أقصى اليسار، الوسط، أقصى اليمين) وهل السنة بها رقم ٤ متعرج أو ٦ معقوفة لليسار أو ٥ حلقة أو ٢ معقوفة لليمين.',
+    },
+    dateLeftPart: {
+      type: Type.STRING,
+      description:
+        'الجزء الموجود في أقصى اليسار من التاريخ كما يظهر مكانياً في الصورة (غالباً السنة مثل ٢٠٢٦ أو قد يكون اليوم).',
+    },
+    dateMiddlePart: {
+      type: Type.STRING,
+      description: 'الجزء الموجود في الوسط بين الفاصلين / (وهو الشهر دائماً).',
+    },
+    dateRightPart: {
+      type: Type.STRING,
+      description:
+        'الجزء الموجود في أقصى اليمين الأقرب لكلمة (التاريخ :) كما يظهر مكانياً في الصورة (غالباً اليوم مثل ٢٧ أو ٨).',
     },
     dateDay: {
       type: Type.STRING,
-      description: 'رقم اليوم في التاريخ كما ظهر (1-31 أو بالأرقام الهندية).',
+      description: 'رقم اليوم المستنتج (1-31).',
     },
     dateMonth: {
       type: Type.STRING,
-      description: 'رقم الشهر في التاريخ كما ظهر (1-12 أو بالأرقام الهندية).',
+      description: 'رقم الشهر المستنتج (1-12).',
     },
     dateYear: {
       type: Type.STRING,
-      description: 'السنة كاملة (4 أرقام مثل ٢٠٢٦ أو 2026، أو رقمين إذا كُتبت مختصرة).',
+      description: 'السنة الكاملة المستنتجة (4 أرقام مثل ٢٠٢٦ أو 2026).',
     },
     dateRaw: {
       type: Type.STRING,
-      description: 'التاريخ كاملاً كما كُتب بالصيغة الظاهرة (مثل ٢٧/١٠/٢٠٢٦ أو ٢٠٢٦/١٠/٢٧).',
+      description: 'التاريخ كاملاً بصيغة واضحة (مثل ٢٠٢٦/١٠/٢٧ أو ٢٧/١٠/٢٠٢٦).',
     },
     dateConfidence: {
       type: Type.STRING,
@@ -127,7 +142,8 @@ const headerHandwritingSchema = {
     },
     dateBox: {
       ...boxSchema,
-      description: 'مربع الإحاطة لقيمة التاريخ المكتوبة فقط (0 إلى 1000).',
+      description:
+        'مربع الإحاطة الشامل لكامل التاريخ المكتوب فقط مع هامش أمان يشمل الرقم الأيمن الملاصق لـ (:) وحتى نهاية السنة يساراً (0 إلى 1000).',
     },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
@@ -142,6 +158,9 @@ const headerHandwritingSchema = {
     'issueNumberConfidence',
     'issueNumberBox',
     'dateObservation',
+    'dateLeftPart',
+    'dateMiddlePart',
+    'dateRightPart',
     'dateDay',
     'dateMonth',
     'dateYear',
@@ -176,27 +195,36 @@ const documentBodySchema = {
       type: Type.STRING,
       description: 'مضمون الكتاب كاملاً بدقة، وإلا سلسلة فارغة.',
     },
+    signatureDateHint: {
+      type: Type.STRING,
+      description:
+        'التاريخ أو السنة المطبوعة أسفل التوقيع أو الختم في نهاية الكتاب (مثل ٢٠٢٦/١١ أو ٢٠٢٦/١٠/٢٧)، وإلا سلسلة فارغة.',
+    },
+    latestBodyYear: {
+      type: Type.STRING,
+      description:
+        'أحدث سنة من 4 أرقام (مثل 2026) مذكورة في نص الكتاب أو المراجع، وإلا سلسلة فارغة.',
+    },
   },
   required: ['issuingEntity', 'title', 'recipient', 'subject', 'bodyContent'],
 };
 
-const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية:
-1. ركّز حصراً على القيمة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في ترويسة الكتاب. تجاهل أرقام الهواتف وصندوق البريد، وتجاهل التواريخ الموجودة أسفل الصفحة عند التوقيع أو الختم.
-2. النماذج شبه المطبوعة: قد يكون جزء من التاريخ أو العدد مطبوعاً والباقي بخط اليد (مثل طباعة /  / ٢٠٢ وإكمال ٦ واليوم والشهر بالقلم). ادمج المطبوع والمكتوب بالقلم في القيمة النهائية الكاملة.
-3. التمييز الدقيق للأرقام الهندية المكتوبة باليد (٠ إلى ٩):
-   - (٠) نقطة حبر صغيرة واضحة في منتصف ارتفاع السطر: انتبه جداً لعدم إسقاط الصفر في الأعداد (مثل ١٠، ٢٠، ٣٠، ١٠٥، ٢٠٢٥، ٢٠٢٦، ١٤٤٧)، ولا تخلط بينه وبين نقاط السطر المطبوع أسفل الخط.
-   - (٥) حلقة أو دائرة أو قلب مغلق واضح الحجم (أكبر وأجوف من نقطة الصفر ٠).
-   - (٢) معقوفة الرأس لليمين (┌) ثم خط نازل؛ (٦) معقوفة الرأس لليسار (┐) ثم خط نازل — راجع اتجاه رأس القوس يمين أم يسار قبل الجزم بين ٢ و٦.
-   - (٧) مفتوحة للأعلى (∨)؛ (٨) مفتوحة للأسفل (∧).
-   - (٣) لها سنّتان أو ثلاث أسنان في أعلاها؛ (٤) متعرجة لليمين (٤)؛ (٩) حلقة علوية بذيل نازل.
-   - (١) خط عمودي للرقم، بينما (/) خط مائل فاصل أطول؛ لا تحوّل الفاصل المائل (/) إلى الرقم ١.
-4. للأرقام الغربية اليدوية (0-9): دقق في التمييز بين 0 و6 و8 و9، وبين 1 و7 والفاصل /، وبين 2 و3 و5، و4 و9.
-5. قواعد العدد (issueNumberRaw):
-   - اقرأ كافة الرموز والأرقام والحروف والشرطات المائلة المكتوبة في حقل العدد كاملةً (سواء كانت أرقاماً فقط أو تحوي بادئة حروف مثل م/٤/١٢٨٥).
-   - افحص كل خانة في digits وتحقق من عدم سقوط أي رقم وسطي (خاصة النقطة ٠) أو رقم ملاصق للنقطتين (:) وسجّله في beforeColon.
-6. قواعد التاريخ (dateRaw):
-   - قد يُكتب التاريخ بخط اليد بصيغة (يوم/شهر/سنة) أو (سنة/شهر/يوم). ميّز السنة ذات الأربعة أرقام (مثل ٢٠٢٤، ٢٠٢٥، ٢٠٢٦، ١٤٤٦، ١٤٤٧) والشهر (١-١٢) واليوم (١-٣١) بدقة، وتأكد من عدم سقوط الصفر ٠ في خانة المئات أو الآحاد (فلا تتحول ٢٠٢٦ إلى ٢٢٦ أو ١٠ إلى ١).
-   - عبّئ dateDay وdateMonth وdateYear بدقة مطابقة لـ dateRaw.`;
+const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية العراقية والعربية:
+1. ركّز حصراً على القيمة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
+2. النماذج شبه المطبوعة: قد يكون جزء من التاريخ مطبوعاً والباقي بخط اليد (مثل /  / ٢٠٢ + ٦). ادمج المطبوع والمكتوب بالقلم.
+3. التمييز الدقيق للأرقام الهندية اليدوية (٠ إلى ٩):
+   - (٠) نقطة حبر فقط دون ساق عمودية؛ لا تحوّل الرقم (٢) ذي الساق العمودية الطويلة إلى صفر (فمثلاً ٢٧ فيها ساق طويلة معقوفة لليمين قبل ٧، وليست ٠٧)، ولا تخلط بين الصفر ونقاط السطر المطبوع أسفل الكتابة.
+   - (٥) حلقة أو قلب مغلق أجوف واضح الحجم.
+   - (٢) معقوفة الرأس لليمين (┌) ثم ساق عمودية؛ (٦) معقوفة الرأس لليسار (┐) ثم ساق عمودية.
+   - انتبه للرقم الأخير من السنة (مثل ٢٠٢٦): في الخط العراقي السريع قد تُكتب ٦ بشكل قوس/زاوية لليسار مع ذيل أفقي خفيف أو ربط سريع مع ٢، فلا تخلط بين ٦ و٤ أو ٢ في نهاية السنة (٢٠٢٦).
+   - (٧) مفتوحة للأعلى (∨)؛ (٨) مفتوحة للأسفل (∧)؛ (٣) أسنان علوية؛ (٤) تعرّج لليمين؛ (٩) حلقة بذيل نازل؛ (١) عمود مفرد، والفاصل (/) خط مائل أطول.
+4. للأرقام الغربية اليدوية (0-9): دقق بين 0 و6 و8 و9، وبين 1 و7 و/، و2 و3 و5، و4 و9.
+5. قواعد قراءة التاريخ مكانياً (مهم جداً لمنع عكس اليوم والشهر!):
+   - في الكتب الرسمية العربية يُكتب التاريخ غالباً من اليمين لليسار بصيغة: [السنة يساراً] / [الشهر وسطاً] / [اليوم يميناً قرب النقطتين :].
+   - سجّل الخانات الثلاث بدقة مكانية كما تراها في الصورة داخل: dateLeftPart (أقصى اليسار)، وdateMiddlePart (الوسط)، وdateRightPart (أقصى اليمين قرب التاريخ :).
+   - لاحظ أن الرقم الأوسط (dateMiddlePart) هو الشهر دائماً، فإذا كانت السنة يساراً (مثل ٢٠٢٦ يساراً)، فإن dateRightPart هو اليوم وdateMiddlePart هو الشهر ولا يجوز عكسهما!
+6. قواعد العدد (issueNumberRaw):
+   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في digits وbeforeColon بدون قص الرقم القريب من النقطتين (:).`;
 
 const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي في ترويسات الكتب الرسمية (حقل العدد وحقل التاريخ) بدقة بالغة دون تخمين.
 ${HANDWRITING_RULES}`;
@@ -268,6 +296,80 @@ function resolveIssueNumber(
   }
 
   return cleanRaw;
+}
+
+function resolveDateFromSpatialParts(headerResult: Record<string, any>): {
+  dateRaw: string;
+  dateNormalized: string;
+} {
+  const leftRaw = cleanLabelNoise(String(headerResult.dateLeftPart || ''), []);
+  const midRaw = cleanLabelNoise(String(headerResult.dateMiddlePart || ''), []);
+  const rightRaw = cleanLabelNoise(String(headerResult.dateRightPart || ''), []);
+
+  const L = toWesternDigits(leftRaw).replace(/\D/g, '');
+  const M = toWesternDigits(midRaw).replace(/\D/g, '');
+  const R = toWesternDigits(rightRaw).replace(/\D/g, '');
+
+  if (L && M && R) {
+    if (L.length === 4 && Number(M) <= 31 && Number(R) <= 31) {
+      const mNum = Number(M);
+      const rNum = Number(R);
+      const [month, day] = mNum > 12 && rNum <= 12 ? [R, M] : [M, R];
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${L}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
+      };
+    }
+
+    if (R.length === 4 && Number(M) <= 31 && Number(L) <= 31) {
+      const mNum = Number(M);
+      const lNum = Number(L);
+      const [month, day] = mNum > 12 && lNum <= 12 ? [L, M] : [M, L];
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${R}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
+      };
+    }
+
+    if (
+      L.length === 2 &&
+      Number(L) >= 20 &&
+      Number(M) >= 1 &&
+      Number(M) <= 12 &&
+      Number(R) >= 1 &&
+      Number(R) <= 31
+    ) {
+      const fullY = Number(L) >= 40 ? `14${L}` : `20${L}`;
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${fullY}/${M.padStart(2, '0')}/${R.padStart(2, '0')}`,
+      };
+    }
+
+    if (
+      R.length === 2 &&
+      Number(R) >= 20 &&
+      Number(L) >= 1 &&
+      Number(L) <= 31 &&
+      Number(M) >= 1 &&
+      Number(M) <= 12
+    ) {
+      const fullY = Number(R) >= 40 ? `14${R}` : `20${R}`;
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${fullY}/${M.padStart(2, '0')}/${L.padStart(2, '0')}`,
+      };
+    }
+  }
+
+  const dateRaw = resolveDateRaw(headerResult);
+  const dateNormalized = normalizeDateString(
+    dateRaw,
+    headerResult.dateDay,
+    headerResult.dateMonth,
+    headerResult.dateYear
+  );
+  return { dateRaw, dateNormalized };
 }
 
 function resolveDateRaw(headerResult: Record<string, any>): string {
@@ -564,7 +666,7 @@ async function runBodyOcr(
       },
     },
     {
-      text: `استخرج الجهة المصدرة والعنوان أو إلى/م ومضمون الكتاب كاملاً.${hintLine}`,
+      text: `استخرج الجهة المصدرة والعنوان أو إلى/م ومضمون الكتاب كاملاً، وأي تاريخ مطبوع أسفل التوقيع في signatureDateHint وأحدث سنة في النص في latestBodyYear.${hintLine}`,
     },
   ];
 
@@ -609,13 +711,7 @@ function buildHeaderPayload(
     headerResult.digits,
     headerResult.beforeColon
   );
-  const dateRaw = resolveDateRaw(headerResult);
-  const dateNormalized = normalizeDateString(
-    dateRaw,
-    headerResult.dateDay,
-    headerResult.dateMonth,
-    headerResult.dateYear
-  );
+  const { dateRaw, dateNormalized } = resolveDateFromSpatialParts(headerResult);
 
   return {
     issueNumberRaw: issueRaw,
@@ -724,6 +820,8 @@ async function startServer() {
           recipient: bodyResult.recipient || '',
           subject: bodyResult.subject || '',
           bodyContent: bodyResult.bodyContent || '',
+          signatureDateHint: bodyResult.signatureDateHint || '',
+          latestBodyYear: bodyResult.latestBodyYear || '',
         },
       });
     } catch (err: unknown) {

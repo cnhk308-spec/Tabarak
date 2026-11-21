@@ -88,7 +88,7 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
     const { issueNumberBox, dateBox } = documentItem.result;
 
     if (issueNumberBox) {
-      cropRegionDataUrl(documentItem.imageDataUrl, issueNumberBox, 30)
+      cropRegionDataUrl(documentItem.imageDataUrl, issueNumberBox, 48)
         .then((url) => {
           if (!cancelled) setIssueCropUrl(url);
         })
@@ -96,7 +96,7 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
     }
 
     if (dateBox) {
-      cropRegionDataUrl(documentItem.imageDataUrl, dateBox, 30)
+      cropRegionDataUrl(documentItem.imageDataUrl, dateBox, 48)
         .then((url) => {
           if (!cancelled) setDateCropUrl(url);
         })

@@ -34,6 +34,8 @@ export interface ExtractionResult {
   recipient?: string;
   subject?: string;
   bodyContent?: string;
+  signatureDateHint?: string;
+  latestBodyYear?: string;
   handwritingNotes?: string;
   isHandwrittenDetected?: boolean;
   boxReferenceImage?: 'header_crop' | 'full_image';
