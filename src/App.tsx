@@ -375,6 +375,7 @@ export default function App() {
           cfg: {
             verifyIssue: boolean;
             verifyDate: boolean;
+            zoomPrecision?: PrecisionMode;
             extraDateHint?: string;
             forceDateOverride?: boolean;
           }
@@ -383,9 +384,12 @@ export default function App() {
           const db = cfg.verifyDate ? sourceHeader.dateBox : null;
           if (!ib && !db) return;
 
+          const effectiveZoomMode: PrecisionMode = cfg.zoomPrecision ?? mode;
           let zoomIssueRes: ExtractionResult | null = null;
           let zoomDateRes: ExtractionResult | null = null;
           const baseHint = hintText ? `${hintText} — ` : '';
+          const strokeHint =
+            'عدّ كل خانة بدقة ولا تدمج الأرقام المتكررة مثل ٨٨ في ٦٤٨٨، وميّز الخطين المتوازيين (١١) عن رقم (٨) ذي الرأس الواحد، وافحص الرقم الأخير من السنة (مثل ٢٠٢٦) بدون تخمين.';
 
           if (ib && db) {
             const unionBox: BoundingBox = {
@@ -404,8 +408,8 @@ export default function App() {
                 {
                   imageBase64: stripImg,
                   mimeType: 'image/png',
-                  precisionMode: 'ultra',
-                  hintText: `${baseHint}لقطة مكبّرة عالية الدقة للعدد والتاريخ بخط اليد. اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر، ولا تحول ٢ ذي الساق العمودية إلى صفر ٠.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
+                  precisionMode: effectiveZoomMode,
+                  hintText: `${baseHint}لقطة مكبّرة عالية الدقة للعدد والتاريخ بخط اليد. ${strokeHint} اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
                 },
                 apiKey
               );
@@ -421,8 +425,8 @@ export default function App() {
                   {
                     imageBase64: issueCrop,
                     mimeType: 'image/png',
-                    precisionMode: 'ultra',
-                    hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:).`,
+                    precisionMode: effectiveZoomMode,
+                    hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:)، ولا تدمج الأرقام المتكررة مثل ٨٨.`,
                   },
                   apiKey
                 ),
@@ -430,8 +434,8 @@ export default function App() {
                   {
                     imageBase64: dateCrop,
                     mimeType: 'image/png',
-                    precisionMode: 'ultra',
-                    hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
+                    precisionMode: effectiveZoomMode,
+                    hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. ${strokeHint} اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
                   },
                   apiKey
                 ),
@@ -445,8 +449,8 @@ export default function App() {
               {
                 imageBase64: issueCrop,
                 mimeType: 'image/png',
-                precisionMode: 'ultra',
-                hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:).`,
+                precisionMode: effectiveZoomMode,
+                hintText: `${baseHint}لقطة مكبّرة لحقل العدد بخط اليد شاملاً الرقم الملاصق لـ (:)، ولا تدمج الأرقام المتكررة مثل ٨٨.`,
               },
               apiKey
             );
@@ -456,8 +460,8 @@ export default function App() {
               {
                 imageBase64: dateCrop,
                 mimeType: 'image/png',
-                precisionMode: 'ultra',
-                hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
+                precisionMode: effectiveZoomMode,
+                hintText: `${baseHint}لقطة مكبّرة لحقل التاريخ بخط اليد. ${strokeHint} اقرأ الأجزاء الثلاثة مكانياً (يسار/وسط/يمين) ولا تعكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
               },
               apiKey
             );
@@ -562,10 +566,12 @@ export default function App() {
               const hasValidDateFormat = /^\d{4}\/\d{2}\/\d{2}$/.test(
                 headerMapped.dateNormalized || ''
               );
+              const isHandwritten = Boolean(headerMapped.isHandwrittenDetected);
               const needsZoomVerify =
                 !isCropped &&
                 Boolean(headerMapped.issueNumberBox || headerMapped.dateBox) &&
                 (mode === 'ultra' ||
+                  isHandwritten ||
                   headerMapped.issueNumberConfidence !== 'high' ||
                   headerMapped.dateConfidence !== 'high' ||
                   !hasValidDateFormat);
@@ -573,11 +579,15 @@ export default function App() {
               if (needsZoomVerify) {
                 ultraZoomPromise = runZoomVerify(headerMapped, {
                   verifyIssue:
-                    mode === 'ultra' || headerMapped.issueNumberConfidence !== 'high',
+                    mode === 'ultra' ||
+                    isHandwritten ||
+                    headerMapped.issueNumberConfidence !== 'high',
                   verifyDate:
                     mode === 'ultra' ||
+                    isHandwritten ||
                     headerMapped.dateConfidence !== 'high' ||
                     !hasValidDateFormat,
+                  zoomPrecision: mode,
                 }).catch(() => {
                   // Keep initial header reading if zoomed verification fails
                 });
@@ -647,6 +657,7 @@ export default function App() {
             await runZoomVerify(currentHeaderSnap, {
               verifyIssue: false,
               verifyDate: true,
+              zoomPrecision: 'ultra',
               extraDateHint: `السنة الظاهرة أسفل التوقيع أو في متن الكتاب هي (${expectedRefYear})، بينما القراءة الأولية أعطت (${headerYear}). دقق جيداً في آخر رقمين من السنة المكتوبة بخط اليد ولا تخلط بين ٦ و ٤ أو ٢، وسجل اليوم والشهر والسنة بدقة مكانية.`,
               forceDateOverride: true,
             });
