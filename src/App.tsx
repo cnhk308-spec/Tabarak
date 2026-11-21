@@ -122,9 +122,10 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            maxDim: 1150,
+            minDim: 1300,
+            maxDim: 1600,
             format: 'image/jpeg',
-            quality: 0.92,
+            quality: 0.96,
             contrastFilter: false,
           });
           resolvedMimeType = 'image/jpeg';
@@ -132,11 +133,12 @@ export default function App() {
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
           const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1000, 0.78),
+            compressImageDataUrl(imageDataUrl, 1000, 0.8),
             cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              maxDim: 1150,
+              minDim: 1300,
+              maxDim: 1600,
               format: 'image/jpeg',
-              quality: 0.92,
+              quality: 0.96,
               contrastFilter: false,
             }),
           ]);

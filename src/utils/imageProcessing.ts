@@ -33,7 +33,7 @@ export async function loadImageFile(file: File): Promise<{
   });
 
   const img = await loadHtmlImage(rawDataUrl);
-  const maxDim = 1800;
+  const maxDim = 2600;
   let targetWidth = img.naturalWidth;
   let targetHeight = img.naturalHeight;
 
