@@ -15,6 +15,7 @@ import {
   convertToEasternDigits,
   convertToWesternDigits,
   cropRegionDataUrl,
+  expandBoundingBox,
 } from '../utils/imageProcessing';
 
 interface ExtractionPanelProps {
@@ -88,7 +89,11 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
     const { issueNumberBox, dateBox } = documentItem.result;
 
     if (issueNumberBox) {
-      cropRegionDataUrl(documentItem.imageDataUrl, issueNumberBox, 48)
+      cropRegionDataUrl(
+        documentItem.imageDataUrl,
+        expandBoundingBox(issueNumberBox, 110, 145, 48, 48),
+        0
+      )
         .then((url) => {
           if (!cancelled) setIssueCropUrl(url);
         })
@@ -96,7 +101,11 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
     }
 
     if (dateBox) {
-      cropRegionDataUrl(documentItem.imageDataUrl, dateBox, 48)
+      cropRegionDataUrl(
+        documentItem.imageDataUrl,
+        expandBoundingBox(dateBox, 110, 145, 48, 48),
+        0
+      )
         .then((url) => {
           if (!cancelled) setDateCropUrl(url);
         })

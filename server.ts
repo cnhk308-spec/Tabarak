@@ -52,10 +52,15 @@ const headerHandwritingSchema = {
       type: Type.BOOLEAN,
       description: 'true إذا ظهر العدد أو التاريخ في الصورة، وإلا false.',
     },
+    issueObservation: {
+      type: Type.STRING,
+      description:
+        'مسح بصري كامل للسطر بجانب (العدد :) من علامة النقطتين (:) يساراً حتى آخر رقم أو حرف أو شرطة، مع عدّ كل الخانات حتى الخفيفة أو البعيدة.',
+    },
     digits: {
       type: Type.ARRAY,
       description:
-        'تحليل خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). لا تسقط أي نقطة صفر (٠) أو رقم وسطي أو رقم ملاصق لـ (:).',
+        'تحليل كافة خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). امسح المساحة الكاملة بجانب (العدد :) ولا تسقط أي رقم ملاصق لـ (:) ولا أي خانة خفيفة أو متباعدة.',
       items: {
         type: Type.OBJECT,
         properties: {
@@ -78,7 +83,7 @@ const headerHandwritingSchema = {
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description: 'العدد كاملاً كما كُتب بخط اليد بجانب (العدد :) دون حذف أي خانة أو بادئة.',
+      description: 'العدد كاملاً بكل خاناته وحروفه وشرطاته كما كُتب بخط اليد بجانب (العدد :) دون قص أو حذف أي خانة من اليمين أو اليسار.',
     },
     issueNumberConfidence: {
       type: Type.STRING,
@@ -91,7 +96,7 @@ const headerHandwritingSchema = {
     issueNumberBox: {
       ...boxSchema,
       description:
-        'مربع الإحاطة الشامل لكامل قيمة العدد المكتوبة فقط مع هامش أمان يشمل الرقم الملاصق للنقطتين (:) يميناً وآخر خانة يساراً (0 إلى 1000).',
+        'مربع الإحاطة الواسع الذي يغطي كامل السطر المكتوب بجانب (العدد :) بدءاً من علامة النقطتين (:) يميناً وحتى أقصى اليسار بعد آخر خانة مكتوبة (0 إلى 1000).',
     },
     dateObservation: {
       type: Type.STRING,
@@ -143,7 +148,7 @@ const headerHandwritingSchema = {
     dateBox: {
       ...boxSchema,
       description:
-        'مربع الإحاطة الشامل لكامل التاريخ المكتوب فقط مع هامش أمان يشمل الرقم الأيمن الملاصق لـ (:) وحتى نهاية السنة يساراً (0 إلى 1000).',
+        'مربع الإحاطة الواسع الذي يغطي كامل التاريخ المكتوب من النقطتين (:) يميناً وحتى نهاية السنة يساراً بهامش أمان مريح دون قص أي خانة (0 إلى 1000).',
     },
     isHandwrittenDetected: {
       type: Type.BOOLEAN,
@@ -152,6 +157,7 @@ const headerHandwritingSchema = {
   },
   required: [
     'headerFound',
+    'issueObservation',
     'digits',
     'beforeColon',
     'issueNumberRaw',
@@ -210,21 +216,25 @@ const documentBodySchema = {
 };
 
 const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية العراقية والعربية:
-1. ركّز حصراً على القيمة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
-2. النماذج شبه المطبوعة: قد يكون جزء من التاريخ مطبوعاً والباقي بخط اليد (مثل /  / ٢٠٢ + ٦). ادمج المطبوع والمكتوب بالقلم.
-3. التمييز الدقيق للأرقام الهندية اليدوية (٠ إلى ٩):
+1. ركّز حصراً على القيمة الكاملة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
+2. عدم القص أو البتر إطلاقاً:
+   - امسح السطر بأكمله بدءاً من يسار النقطتين (:) وحتى نهاية الخط المنقط أو المساحة الفارغة يساراً، فبعض الأرقام تكون متباعدة أو ذات حبر رمادي خفيف أو تلامس النقطتين (:).
+   - إذا احتوى العدد على أكثر من جزء بالخط اليدوي (مثل أرقام وحروف عربية وشرطات مائلة: م/٤/١٢٨٥ أو ٦٤٨٨ أو ٥٨/ص) فاقرأه كاملاً دون اقتصار على جزء واحد أو إسقاط الرقم الأيمن والأيسر.
+3. النماذج شبه المطبوعة: قد يكون جزء من التاريخ مطبوعاً والباقي بخط اليد (مثل /  / ٢٠٢ + ٦). ادمج المطبوع والمكتوب بالقلم.
+4. التمييز الدقيق للأرقام الهندية اليدوية (٠ إلى ٩):
    - (٠) نقطة حبر فقط دون ساق عمودية؛ لا تحوّل الرقم (٢) ذي الساق العمودية الطويلة إلى صفر (فمثلاً ٢٧ فيها ساق طويلة معقوفة لليمين قبل ٧، وليست ٠٧)، ولا تخلط بين الصفر ونقاط السطر المطبوع أسفل الكتابة.
-   - (٥) حلقة أو قلب مغلق أجوف واضح الحجم.
+   - (٥) حلقة أو قلب مغلق أجوف واضح الحجم؛ وقد تبدو برأس مسطح أو مائل بالحبر الخفيف.
    - (٢) معقوفة الرأس لليمين (┌) ثم ساق عمودية؛ (٦) معقوفة الرأس لليسار (┐) ثم ساق عمودية.
    - انتبه للرقم الأخير من السنة (مثل ٢٠٢٦): في الخط العراقي السريع قد تُكتب ٦ بشكل قوس/زاوية لليسار مع ذيل أفقي خفيف أو ربط سريع مع ٢، فلا تخلط بين ٦ و٤ أو ٢ في نهاية السنة (٢٠٢٦).
    - (٧) مفتوحة للأعلى (∨)؛ (٨) مفتوحة للأسفل (∧)؛ (٣) أسنان علوية؛ (٤) تعرّج لليمين؛ (٩) حلقة بذيل نازل؛ (١) عمود مفرد، والفاصل (/) خط مائل أطول.
-4. للأرقام الغربية اليدوية (0-9): دقق بين 0 و6 و8 و9، وبين 1 و7 و/، و2 و3 و5، و4 و9.
-5. قواعد قراءة التاريخ مكانياً (مهم جداً لمنع عكس اليوم والشهر!):
+5. للأرقام الغربية اليدوية (0-9): دقق بين 0 و6 و8 و9، وبين 1 و7 و/، و2 و3 و5، و4 و9.
+6. قواعد قراءة التاريخ مكانياً (مهم جداً لمنع عكس اليوم والشهر!):
    - في الكتب الرسمية العربية يُكتب التاريخ غالباً من اليمين لليسار بصيغة: [السنة يساراً] / [الشهر وسطاً] / [اليوم يميناً قرب النقطتين :].
    - سجّل الخانات الثلاث بدقة مكانية كما تراها في الصورة داخل: dateLeftPart (أقصى اليسار)، وdateMiddlePart (الوسط)، وdateRightPart (أقصى اليمين قرب التاريخ :).
    - لاحظ أن الرقم الأوسط (dateMiddlePart) هو الشهر دائماً، فإذا كانت السنة يساراً (مثل ٢٠٢٦ يساراً)، فإن dateRightPart هو اليوم وdateMiddlePart هو الشهر ولا يجوز عكسهما!
-6. قواعد العدد (issueNumberRaw):
-   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في digits وbeforeColon بدون قص الرقم القريب من النقطتين (:).`;
+7. قواعد العدد (issueNumberRaw) ومربعات الإحاطة:
+   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في issueObservation وdigits وbeforeColon بدون قص أي خانة.
+   - اجعل issueNumberBox وdateBox شاملين لكل ما كُتب بجانب النقطتين (:) بهامش مريح يميناً ويساراً.`;
 
 const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي في ترويسات الكتب الرسمية (حقل العدد وحقل التاريخ) بدقة بالغة دون تخمين.
 ${HANDWRITING_RULES}`;
@@ -275,11 +285,13 @@ function resolveIssueNumber(
   const joined = chars.join('');
   if (!cleanRaw) return joined;
 
+  const rawCompact = cleanRaw.replace(/\s+/g, '');
+  const joinedCompact = joined.replace(/\s+/g, '');
   const rawHasLettersOrSlash = /[ء-يA-Za-z\/\\-]/.test(cleanRaw);
-  const joinedDigitsCount = toWesternDigits(joined).replace(/\D/g, '').length;
-  const rawDigitsCount = toWesternDigits(cleanRaw).replace(/\D/g, '').length;
+  const joinedDigitsCount = toWesternDigits(joinedCompact).replace(/\D/g, '').length;
+  const rawDigitsCount = toWesternDigits(rawCompact).replace(/\D/g, '').length;
 
-  if (!rawHasLettersOrSlash && joinedDigitsCount > rawDigitsCount) {
+  if (joinedDigitsCount > rawDigitsCount && joinedCompact.length > rawCompact.length) {
     return joined;
   }
 
@@ -561,6 +573,10 @@ function stripDataUrlPrefix(input: string): string {
   return input.includes(',') ? input.split(',')[1] : input;
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function runHeaderHandwritingOcr(
   ai: GoogleGenAI,
   imageBase64: string,
@@ -576,7 +592,7 @@ async function runHeaderHandwritingOcr(
       },
     },
     {
-      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) بدقة تامة من الصورة مع التركيز الشديد على خط اليد. افحص كل خانة للعدد في digits وتحقق من الرقم الملاصق للنقطتين في beforeColon، وفصّل اليوم والشهر والسنة في dateDay وdateMonth وdateYear دون إسقاط الصفر (٠).${hintLine}`,
+      text: `اقرأ حقل (العدد :) وحقل (التاريخ :) كاملاً دون قص أو بتر أي خانة من اليمين أو اليسار. امسح السطر كله من النقطتين (:) يساراً في issueObservation وdigits، وتحقق من الرقم الملاصق للنقطتين في beforeColon، واقرأ التاريخ مكانياً (يسار/وسط/يمين) دون إسقاط الصفر (٠).${hintLine}`,
     },
   ];
 
@@ -599,50 +615,85 @@ async function runHeaderHandwritingOcr(
       },
     });
 
-  const primaryModel = 'gemini-4-hydrogen';
   const primaryLevel =
     precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
-  const timeoutMs = precisionMode === 'ultra' ? 24000 : 19000;
+
+  const attemptPlan: Array<{
+    model: string;
+    level: ThinkingLevel | null;
+    highRes: boolean;
+    timeoutMs: number;
+    delayBeforeMs: number;
+  }> = [
+    {
+      model: 'gemini-4-hydrogen',
+      level: primaryLevel,
+      highRes: true,
+      timeoutMs: precisionMode === 'ultra' ? 28000 : 22000,
+      delayBeforeMs: 0,
+    },
+    {
+      model: 'gemini-3.1-flash-lite',
+      level: null,
+      highRes: true,
+      timeoutMs: 20000,
+      delayBeforeMs: 650,
+    },
+    {
+      model: 'gemini-4-hydrogen',
+      level: ThinkingLevel.LOW,
+      highRes: true,
+      timeoutMs: 22000,
+      delayBeforeMs: 1400,
+    },
+    {
+      model: 'gemini-3.1-flash-lite',
+      level: null,
+      highRes: false,
+      timeoutMs: 20000,
+      delayBeforeMs: 2200,
+    },
+    {
+      model: 'gemini-3.1-flash-lite',
+      level: null,
+      highRes: false,
+      timeoutMs: 22000,
+      delayBeforeMs: 3200,
+    },
+  ];
 
   let response;
-  try {
-    response = await withTimeout(
-      callModel(primaryModel, primaryLevel, true),
-      timeoutMs
-    );
-  } catch (err: unknown) {
-    const status = getApiErrorStatus(err);
-    if (status === 400) {
-      try {
-        response = await withTimeout(
-          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
-          timeoutMs
-        );
-      } catch {
-        response = await withTimeout(
-          callModel('gemini-3.1-flash-lite', null, false),
-          timeoutMs
-        );
-      }
-    } else if (status === 429 || status === 503 || status === 500) {
-      try {
-        response = await callWithRetry(
-          () =>
-            withTimeout(
-              callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
-              timeoutMs
-            ),
-          1
-        );
-      } catch {
-        response = await withTimeout(
-          callModel('gemini-3.1-flash-lite', null, false),
-          timeoutMs
-        );
-      }
-    } else {
-      throw err;
+  let lastError: unknown;
+
+  for (let i = 0; i < attemptPlan.length; i++) {
+    const step = attemptPlan[i];
+    if (step.delayBeforeMs > 0) {
+      await sleepMs(step.delayBeforeMs);
     }
+    try {
+      response = await withTimeout(
+        callModel(step.model, step.level, step.highRes),
+        step.timeoutMs
+      );
+      break;
+    } catch (err: unknown) {
+      lastError = err;
+      const status = getApiErrorStatus(err);
+      const msg = (err as { message?: string })?.message || '';
+      const isRetryable =
+        status === 429 ||
+        status === 503 ||
+        status === 500 ||
+        status === 400 ||
+        msg.toLowerCase().includes('timeout');
+      if (!isRetryable || i === attemptPlan.length - 1) {
+        throw err;
+      }
+    }
+  }
+
+  if (!response) {
+    throw lastError;
   }
 
   const rawText = (response.text ?? '').trim();
@@ -671,29 +722,40 @@ async function runBodyOcr(
   ];
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: { parts },
-      config: {
-        systemInstruction: BODY_OCR_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: documentBodySchema,
-      },
-    });
+    const response = await callWithRetry(
+      () =>
+        withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: { parts },
+            config: {
+              systemInstruction: BODY_OCR_INSTRUCTION,
+              responseMimeType: 'application/json',
+              responseSchema: documentBodySchema,
+            },
+          }),
+          22000
+        ),
+      1
+    );
     const rawText = (response.text ?? '').trim();
     return rawText ? JSON.parse(rawText) : {};
   } catch {
     try {
-      const fallbackResponse = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: { parts },
-        config: {
-          systemInstruction: BODY_OCR_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseSchema: documentBodySchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
+      await sleepMs(800);
+      const fallbackResponse = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: { parts },
+          config: {
+            systemInstruction: BODY_OCR_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: documentBodySchema,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+        22000
+      );
       const fallbackText = (fallbackResponse.text ?? '').trim();
       return fallbackText ? JSON.parse(fallbackText) : {};
     } catch {

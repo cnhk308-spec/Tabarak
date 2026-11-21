@@ -98,6 +98,22 @@ function isSameCalendarEra(y1: number, y2: number): boolean {
   return (y1 >= 1900 && y2 >= 1900) || (y1 < 1900 && y2 < 1900);
 }
 
+function isTransientExtractionError(err: unknown): boolean {
+  const msg = String((err as { message?: string })?.message || '').toLowerCase();
+  return (
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('timeout') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('ضغطاً') ||
+    msg.includes('مشغولة') ||
+    msg.includes('حد الطلبات') ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch')
+  );
+}
+
 function reconcileZoomedHeaderResult(
   prev: ExtractionResult,
   zoomIssue: ExtractionResult | null,
@@ -109,10 +125,19 @@ function reconcileZoomedHeaderResult(
   const zoomedIssueRaw = (zoomIssue?.issueNumberRaw || '').trim();
   if (zoomIssue && zoomedIssueRaw) {
     const prevRaw = prev.issueNumberRaw || '';
+    const prevNormLen = convertToWesternDigits(prevRaw).replace(/\s+/g, '').length;
+    const zoomNormLen = convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, '').length;
+    const zoomIsShorterPrefixOfPrev =
+      prevNormLen > zoomNormLen &&
+      convertToWesternDigits(prevRaw)
+        .replace(/\s+/g, '')
+        .includes(convertToWesternDigits(zoomedIssueRaw).replace(/\s+/g, ''));
+
     if (zoomedIssueRaw !== prevRaw) {
       if (
-        zoomIssue.issueNumberConfidence === 'low' &&
-        prev.issueNumberConfidence === 'high'
+        (zoomIssue.issueNumberConfidence === 'low' &&
+          prev.issueNumberConfidence === 'high') ||
+        (zoomIsShorterPrefixOfPrev && prev.issueNumberConfidence !== 'low')
       ) {
         next.alternativeIssueNumber = zoomedIssueRaw;
       } else {
@@ -263,10 +288,10 @@ export default function App() {
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 950,
-            maxDim: 1550,
+            minDim: 1100,
+            maxDim: 1750,
             format: 'image/jpeg',
-            quality: 0.96,
+            quality: 0.98,
             contrastFilter: false,
           });
           resolvedMimeType = 'image/jpeg';
@@ -274,12 +299,12 @@ export default function App() {
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
           const [compressedFull, headerJpeg] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1050, 0.76),
+            compressImageDataUrl(imageDataUrl, 1100, 0.78),
             cropRegionDataUrl(imageDataUrl, TOP_HEADER_BOX, 0, {
-              minDim: 1000,
-              maxDim: 1650,
+              minDim: 1150,
+              maxDim: 1800,
               format: 'image/jpeg',
-              quality: 0.96,
+              quality: 0.98,
               contrastFilter: false,
             }),
           ]);
@@ -335,10 +360,10 @@ export default function App() {
         };
 
         const cropZoomRegion = async (box: BoundingBox) => {
-          const expanded = expandBoundingBox(box, 135, 165, 55, 55);
+          const expanded = expandBoundingBox(box, 185, 230, 72, 72);
           const rawCrop = await cropRegionDataUrl(imageDataUrl, expanded, 0, {
-            minDim: 1050,
-            maxDim: 1650,
+            minDim: 1200,
+            maxDim: 1850,
             format: 'image/png',
             contrastFilter: false,
           });
@@ -370,8 +395,8 @@ export default function App() {
               ymax: Math.max(ib.ymax, db.ymax),
             };
             const unionCompact =
-              unionBox.xmax - unionBox.xmin <= 720 &&
-              unionBox.ymax - unionBox.ymin <= 400;
+              unionBox.xmax - unionBox.xmin <= 820 &&
+              unionBox.ymax - unionBox.ymin <= 460;
 
             if (unionCompact) {
               const stripImg = await cropZoomRegion(unionBox);
@@ -487,8 +512,8 @@ export default function App() {
           );
         };
 
-        const fullResult = await extractDocumentProgressive(
-          {
+        const executeProgressiveWithRecovery = async () => {
+          const paramsPayload = {
             imageBase64: payloadDataUrl,
             mimeType: resolvedMimeType,
             headerImageBase64,
@@ -496,10 +521,9 @@ export default function App() {
             precisionMode: mode,
             isCroppedRegion: isCropped,
             hintText,
-          },
-          apiKey,
-          {
-            onHeaderReady: (rawHeaderResult) => {
+          };
+          const callbacksPayload = {
+            onHeaderReady: (rawHeaderResult: ExtractionResult) => {
               if (isStale()) return;
               const headerMapped = mapResultBoxes(rawHeaderResult);
               const headerDurationMs = Math.round(performance.now() - startedAt);
@@ -559,8 +583,31 @@ export default function App() {
                 });
               }
             },
+          };
+
+          try {
+            return await extractDocumentProgressive(
+              paramsPayload,
+              apiKey,
+              callbacksPayload
+            );
+          } catch (firstErr) {
+            if (isStale() || !isTransientExtractionError(firstErr)) {
+              throw firstErr;
+            }
+            await new Promise((r) => setTimeout(r, 2200));
+            if (isStale()) {
+              throw firstErr;
+            }
+            return await extractDocumentProgressive(
+              paramsPayload,
+              apiKey,
+              callbacksPayload
+            );
           }
-        );
+        };
+
+        const fullResult = await executeProgressiveWithRecovery();
 
         if (isStale()) return null;
         const mappedFull = mapResultBoxes(fullResult);
@@ -783,6 +830,9 @@ export default function App() {
       let skippedCount = 0;
 
       for (let i = 0; i < queuedDocs.length; i++) {
+        if (i > 0) {
+          await new Promise((r) => setTimeout(r, 220));
+        }
         const doc = queuedDocs[i];
         setActiveId(doc.id);
         setFolderScanState({
@@ -942,7 +992,11 @@ export default function App() {
       setDocuments((prev) => [...queuedDocs, ...prev]);
       setActiveId(queuedDocs[0].id);
 
-      for (const doc of queuedDocs) {
+      for (let i = 0; i < queuedDocs.length; i++) {
+        if (i > 0) {
+          await new Promise((r) => setTimeout(r, 220));
+        }
+        const doc = queuedDocs[i];
         await runExtraction(doc.id, doc.imageDataUrl, doc.mimeType, precisionMode, {
           applyContrast: enhanceContrast,
         });
