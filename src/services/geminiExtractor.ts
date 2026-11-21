@@ -347,12 +347,9 @@ async function runHeaderHandwritingOcrBrowser(
 
   const primaryModel =
     precisionMode === 'ultra' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
-  const primaryLevel = ThinkingLevel.MEDIUM;
-  const fallbackModel =
-    precisionMode === 'ultra' ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
-  const fallbackLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
-  const timeoutMs = precisionMode === 'ultra' ? 9000 : 7000;
+  const primaryLevel =
+    precisionMode === 'ultra' ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW;
+  const timeoutMs = precisionMode === 'ultra' ? 20000 : 18000;
 
   let response;
   try {
@@ -367,13 +364,13 @@ async function runHeaderHandwritingOcrBrowser(
     if (msg.includes('PROXY_GENERATION_DISABLED') || status === 400) {
       try {
         response = await withTimeout(
-          callModel(primaryModel, null, false),
+          callModel('gemini-3.1-flash-lite', null, false),
           timeoutMs
         );
       } catch {
         try {
           response = await withTimeout(
-            callModel(fallbackModel, fallbackLevel, false),
+            callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
             timeoutMs
           );
         } catch (fbErr: unknown) {
@@ -387,18 +384,26 @@ async function runHeaderHandwritingOcrBrowser(
     } else if (status === 429 || status === 503 || status === 500) {
       try {
         response = await callWithRetry(
-          () => callModel(fallbackModel, fallbackLevel, true),
+          () =>
+            withTimeout(
+              callModel('gemini-3.1-flash-lite', null, false),
+              timeoutMs
+            ),
           1
         );
-      } catch (fbErr: unknown) {
-        const fbStatus = getApiErrorStatus(fbErr);
-        if (fbStatus === 400) {
-          response = await callModel(fallbackModel, null, false);
-        } else if (fbStatus === 503 || fbStatus === 429) {
-          throw new Error(
-            'الخدمة تشهد ضغطاً مؤقتاً حالياً (503). يرجى الضغط على إعادة المحاولة بعد ثوانٍ.'
+      } catch (liteErr: unknown) {
+        try {
+          response = await withTimeout(
+            callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
+            timeoutMs
           );
-        } else {
+        } catch (fbErr: unknown) {
+          const fbStatus = getApiErrorStatus(fbErr) || getApiErrorStatus(liteErr);
+          if (fbStatus === 503 || fbStatus === 429) {
+            throw new Error(
+              'الخدمة تشهد ضغطاً مؤقتاً حالياً (503). يرجى الضغط على إعادة المحاولة بعد ثوانٍ.'
+            );
+          }
           throw fbErr;
         }
       }

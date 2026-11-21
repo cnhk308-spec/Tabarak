@@ -355,12 +355,8 @@ async function runHeaderHandwritingOcr(
   const primaryModel =
     precisionMode === 'ultra' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
   const primaryLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.MEDIUM : ThinkingLevel.MEDIUM;
-  const fallbackModel =
-    precisionMode === 'ultra' ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
-  const fallbackLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.LOW;
-  const timeoutMs = precisionMode === 'ultra' ? 9000 : 7000;
+    precisionMode === 'ultra' ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW;
+  const timeoutMs = precisionMode === 'ultra' ? 20000 : 18000;
 
   let response;
   try {
@@ -373,27 +369,30 @@ async function runHeaderHandwritingOcr(
     if (status === 400) {
       try {
         response = await withTimeout(
-          callModel(primaryModel, null, false),
+          callModel('gemini-3.1-flash-lite', null, false),
           timeoutMs
         );
       } catch {
         response = await withTimeout(
-          callModel(fallbackModel, fallbackLevel, false),
+          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
           timeoutMs
         );
       }
     } else if (status === 429 || status === 503 || status === 500) {
       try {
         response = await callWithRetry(
-          () => callModel(fallbackModel, fallbackLevel, true),
+          () =>
+            withTimeout(
+              callModel('gemini-3.1-flash-lite', null, false),
+              timeoutMs
+            ),
           1
         );
-      } catch (fbErr: unknown) {
-        if (getApiErrorStatus(fbErr) === 400) {
-          response = await callModel(fallbackModel, null, false);
-        } else {
-          throw fbErr;
-        }
+      } catch {
+        response = await withTimeout(
+          callModel('gemini-4-hydrogen', ThinkingLevel.LOW, false),
+          timeoutMs
+        );
       }
     } else {
       throw err;
