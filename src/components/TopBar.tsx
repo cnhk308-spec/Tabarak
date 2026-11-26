@@ -1,7 +1,7 @@
 import React from 'react';
 import { FolderOpen, FolderSearch, Loader2, Upload } from 'lucide-react';
 
-export type AppView = 'workspace' | 'ledger' | 'guide';
+export type AppView = 'workspace' | 'ledger';
 
 interface TopBarProps {
   activeView: AppView;
@@ -27,7 +27,6 @@ export const TopBar: React.FC<TopBarProps> = ({
   const navItems: Array<{ id: AppView; label: string }> = [
     { id: 'workspace', label: 'مساحة الفحص' },
     { id: 'ledger', label: 'سجل الكتب' },
-    { id: 'guide', label: 'إرشادات الدقة' },
   ];
 
   return (

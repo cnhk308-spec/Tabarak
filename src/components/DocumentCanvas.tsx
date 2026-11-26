@@ -12,7 +12,6 @@ import {
   Sparkles,
   Check,
   X,
-  FileText,
 } from 'lucide-react';
 import { BoundingBox, DocumentItem, ScanRegion } from '../types';
 import { TOP_RIGHT_BOX } from '../utils/imageProcessing';
@@ -28,8 +27,6 @@ interface DocumentCanvasProps {
   onExtractCroppedBox: (box: BoundingBox) => void;
   onDropFiles: (files: FileList | File[]) => void;
   onTriggerUpload: () => void;
-  onLoadSample: () => void;
-  isGeneratingSample: boolean;
 }
 
 export const DocumentCanvas: React.FC<DocumentCanvasProps> = ({
@@ -43,8 +40,6 @@ export const DocumentCanvas: React.FC<DocumentCanvasProps> = ({
   onExtractCroppedBox,
   onDropFiles,
   onTriggerUpload,
-  onLoadSample,
-  isGeneratingSample,
 }) => {
   const [zoom, setZoom] = useState<number>(1);
   const [cropMode, setCropMode] = useState<boolean>(false);
@@ -167,18 +162,6 @@ export const DocumentCanvas: React.FC<DocumentCanvasProps> = ({
             >
               <Upload className="h-4 w-4" aria-hidden="true" />
               <span>اختيار صورة من الجهاز</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onLoadSample}
-              disabled={isGeneratingSample}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <FileText className="h-4 w-4" aria-hidden="true" />
-              <span>
-                {isGeneratingSample ? 'جاري التحميل...' : 'تجربة بنموذج كتاب رسمي'}
-              </span>
             </button>
           </div>
 

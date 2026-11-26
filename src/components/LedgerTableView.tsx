@@ -31,6 +31,10 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'verified' | 'review'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const hasPendingProcessing = useMemo(
+    () => documents.some((d) => d.status === 'processing' || Boolean(d.isBodyLoading)),
+    [documents]
+  );
 
   const filteredDocs = useMemo(() => {
     return documents.filter((doc) => {
@@ -154,10 +158,18 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
               <button
                 type="button"
                 onClick={handleExportXlsx}
-                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer"
+                disabled={hasPendingProcessing}
+                title={
+                  hasPendingProcessing
+                    ? 'يرجى الانتظار حتى تكتمل قراءة ومراجعة جميع الكتب'
+                    : 'تصدير السجل إلى ملف Excel'
+                }
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>تصدير XLSX</span>
+                <span>
+                  {hasPendingProcessing ? 'بانتظار اكتمال المراجعة...' : 'تصدير XLSX'}
+                </span>
               </button>
               {!compact && (
                 <button

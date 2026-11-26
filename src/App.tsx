@@ -5,7 +5,6 @@ import { DocumentQueueSidebar } from './components/DocumentQueueSidebar';
 import { DocumentCanvas } from './components/DocumentCanvas';
 import { ExtractionPanel } from './components/ExtractionPanel';
 import { LedgerTableView } from './components/LedgerTableView';
-import { AccuracyGuideView } from './components/AccuracyGuideView';
 import { GeminiKeyButton } from './components/GeminiKeyButton';
 import {
   extractDocumentProgressive,
@@ -39,9 +38,7 @@ import {
   convertToEasternDigits,
   convertToWesternDigits,
   cropRegionDataUrl,
-  enhanceHandwritingCropDataUrl,
   enhanceInkContrastDataUrl,
-  generateSampleOfficialLetterFile,
   loadImageFile,
   rotateImageDataUrl,
 } from './utils/imageProcessing';
@@ -145,10 +142,20 @@ function reconcileZoomedHeaderResult(
       (zoomedDateRaw && zoomedDateRaw !== prevRaw);
 
     if (isDifferent) {
-      if (
+      const currCalYear = new Date().getFullYear();
+      const prevYear = extractYearNumber(prevNorm || prevRaw);
+      const zoomYear = extractYearNumber(zoomedDateNorm || zoomedDateRaw);
+      const wouldDowngradeCurrentYear =
         !options?.forceDateOverride &&
-        zoomDate.dateConfidence === 'low' &&
-        prev.dateConfidence === 'high'
+        prevYear === currCalYear &&
+        zoomYear !== null &&
+        zoomYear !== currCalYear;
+
+      if (
+        wouldDowngradeCurrentYear ||
+        (!options?.forceDateOverride &&
+          zoomDate.dateConfidence === 'low' &&
+          prev.dateConfidence === 'high')
       ) {
         next.alternativeDate = zoomedDateNorm || zoomedDateRaw;
       } else {
@@ -179,13 +186,12 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>('workspace');
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [precisionMode, setPrecisionMode] = useState<PrecisionMode>('standard');
+  const [precisionMode, setPrecisionMode] = useState<PrecisionMode>('ultra');
   const [scanRegion, setScanRegion] = useState<ScanRegion>('full');
   const [digitPreference, setDigitPreference] = useState<DigitPreference>('western');
   const [hintText, setHintText] = useState<string>('');
   const [enhanceContrast, setEnhanceContrast] = useState<boolean>(false);
   const [showBoxes, setShowBoxes] = useState<boolean>(true);
-  const [isGeneratingSample, setIsGeneratingSample] = useState<boolean>(false);
   const [apiKey, setApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [savedFolderName, setSavedFolderName] = useState<string | null>(null);
   const [folderScanState, setFolderScanState] = useState<{
@@ -195,6 +201,7 @@ export default function App() {
     officialCount: number;
     skippedCount: number;
     folderName: string;
+    phaseMessage?: string;
     doneMessage?: string;
     errorMessage?: string;
   } | null>(null);
@@ -343,7 +350,7 @@ export default function App() {
           const effectiveZoomMode: PrecisionMode = cfg.zoomPrecision ?? 'ultra';
           const baseHint = hintText ? `${hintText} — ` : '';
           const strokeHint =
-            'اقرأ كامل الجزء الأعلى الأيمن من الورقة بالكامل دون قص أو تحديد بمربعات ضيقة. دقق في كل ضربة قلم: لا تدمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، ولا تسقط الصفر (٠) أو الرقم الوسطي، وميّز الرقم (٩) ذي الحلقة العلوية عن (٨ ∧)، وتأكد من (٦) في نهاية (٢٠٢٦) دون استبدالها بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).';
+            'اقرأ كامل الجزء الأعلى الأيمن من الورقة بالكامل دون قص أو تحديد بمربعات ضيقة. تحقق مرتين من اليمين لليسار ثم من اليسار لليمين: لا تسقط الخانة الأخيرة القريبة من النقطتين (:) مثل ٦ في ٥٠٨٦->٥٠٨، ولا تسقط الصفر (٠) أو الرقم الوسطي، ولا تدمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، وميّز الرقم (٩) ذي الحلقة العلوية عن (٨ ∧)، وتأكد من (٦) في نهاية (٢٠٢٦) دون استبدالها بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).';
 
           let verifyImg = payloadDataUrl;
           let verifyMime = resolvedMimeType;
@@ -369,19 +376,10 @@ export default function App() {
             }
           }
 
-          let enhancedVerifyImg: string | undefined;
-          try {
-            enhancedVerifyImg = await enhanceHandwritingCropDataUrl(verifyImg);
-          } catch {
-            enhancedVerifyImg = undefined;
-          }
-
           const combined = await extractHeaderOnlyWithGemini(
             {
               imageBase64: verifyImg,
               mimeType: verifyMime,
-              enhancedImageBase64: enhancedVerifyImg,
-              enhancedMimeType: enhancedVerifyImg ? 'image/png' : undefined,
               precisionMode: effectiveZoomMode,
               hintText: `${baseHint}قراءة كاملة وعالية الدقة للجزء الأعلى الأيمن من الورقة تضم الترويسة والعدد والتاريخ معاً. ${strokeHint} اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
             },
@@ -502,8 +500,7 @@ export default function App() {
 
               const needsZoomVerify =
                 (!isCropped || originBox === TOP_RIGHT_BOX) &&
-                (mode === 'ultra' ||
-                  isHandwritten ||
+                (isHandwritten ||
                   headerMapped.issueNumberConfidence !== 'high' ||
                   headerMapped.dateConfidence !== 'high' ||
                   !hasValidDateFormat ||
@@ -512,19 +509,14 @@ export default function App() {
               if (needsZoomVerify) {
                 ultraZoomPromise = runZoomVerify(headerMapped, {
                   verifyIssue:
-                    mode === 'ultra' ||
                     isHandwritten ||
                     headerMapped.issueNumberConfidence !== 'high',
                   verifyDate:
-                    mode === 'ultra' ||
                     isHandwritten ||
                     headerMapped.dateConfidence !== 'high' ||
                     !hasValidDateFormat ||
                     hasYearDeviation,
-                  zoomPrecision:
-                    mode === 'ultra' || isHandwritten || hasYearDeviation
-                      ? 'ultra'
-                      : mode,
+                  zoomPrecision: 'ultra',
                 }).catch(() => {
                   // Keep initial header reading if zoomed verification fails
                 });
@@ -578,7 +570,8 @@ export default function App() {
           sigYear &&
           headerYear &&
           isSameCalendarEra(sigYear, headerYear) &&
-          sigYear !== headerYear
+          sigYear !== headerYear &&
+          (headerYear !== currentCalendarYear || sigYear > headerYear)
         ) {
           expectedRefYear = sigYear;
           provenYear = sigYear;
@@ -857,8 +850,9 @@ export default function App() {
         folderName,
       });
 
-      const officialDocs: DocumentItem[] = [];
-      let skippedCount = 0;
+      const batchResults = new Map<string, DocumentItem | null>();
+      let initialOfficialCount = 0;
+      let initialSkippedCount = 0;
 
       for (let i = 0; i < queuedDocs.length; i++) {
         if (i > 0) {
@@ -870,8 +864,8 @@ export default function App() {
           active: true,
           current: i + 1,
           total: queuedDocs.length,
-          officialCount: officialDocs.length,
-          skippedCount,
+          officialCount: initialOfficialCount,
+          skippedCount: initialSkippedCount,
           folderName,
         });
 
@@ -883,8 +877,77 @@ export default function App() {
           { applyContrast: enhanceContrast, baseDoc: doc }
         );
 
+        batchResults.set(doc.id, extractedDoc);
         if (extractedDoc && isOfficialLetterResult(extractedDoc.result)) {
-          officialDocs.push(extractedDoc);
+          initialOfficialCount += 1;
+        } else {
+          initialSkippedCount += 1;
+        }
+      }
+
+      // Stage 2: Complete all retries, missing fields, and review checks BEFORE Excel export
+      const needsCompletionOrReview = (item: DocumentItem | null | undefined): boolean => {
+        if (!item || item.status === 'error' || !item.result) return true;
+        if (!isOfficialLetterResult(item.result)) return false;
+        const validDate = /^\d{4}\/\d{2}\/\d{2}$/.test(item.result.dateNormalized || '');
+        const needsIssueCheck =
+          !item.editedIssueNumber.trim() || item.result.issueNumberConfidence !== 'high';
+        const needsDateCheck =
+          !item.editedDate.trim() || item.result.dateConfidence !== 'high' || !validDate;
+        const needsBodyCheck =
+          scanRegion === 'full' &&
+          !item.editedBodyContent.trim() &&
+          !item.editedSubject.trim() &&
+          !item.editedTitle.trim();
+        return needsIssueCheck || needsDateCheck || needsBodyCheck;
+      };
+
+      const reviewCandidates = queuedDocs.filter((doc) =>
+        needsCompletionOrReview(batchResults.get(doc.id))
+      );
+
+      for (let rIdx = 0; rIdx < reviewCandidates.length; rIdx++) {
+        const doc = reviewCandidates[rIdx];
+        const prevItem = batchResults.get(doc.id);
+        setActiveId(doc.id);
+        setFolderScanState({
+          active: true,
+          current: queuedDocs.length,
+          total: queuedDocs.length,
+          officialCount: Array.from(batchResults.values()).filter(
+            (item) => item && isOfficialLetterResult(item.result)
+          ).length,
+          skippedCount: 0,
+          folderName,
+          phaseMessage: `جاري إكمال مراجعة وتدقيق جميع المعلومات قبل تنزيل Excel (${rIdx + 1} من ${reviewCandidates.length}: ${doc.fileName})...`,
+        });
+
+        await new Promise((r) => setTimeout(r, prevItem ? 400 : 1200));
+        const reviewedDoc = await runExtraction(
+          doc.id,
+          doc.imageDataUrl,
+          doc.mimeType,
+          'ultra',
+          { applyContrast: enhanceContrast, baseDoc: prevItem ?? doc }
+        );
+        if (reviewedDoc) {
+          batchResults.set(doc.id, reviewedDoc);
+        }
+      }
+
+      // Sync with latest state snapshot (respecting any user edits/verifications) and ensure zero pending tasks
+      const officialDocs: DocumentItem[] = [];
+      let skippedCount = 0;
+      for (const doc of queuedDocs) {
+        const liveDoc = documentsRef.current.find((d) => d.id === doc.id);
+        const batchDoc = batchResults.get(doc.id);
+        const finalDoc =
+          liveDoc && liveDoc.status !== 'processing' && !liveDoc.isBodyLoading
+            ? liveDoc
+            : batchDoc;
+
+        if (finalDoc && isOfficialLetterResult(finalDoc.result)) {
+          officialDocs.push(finalDoc);
         } else {
           skippedCount += 1;
         }
@@ -901,9 +964,9 @@ export default function App() {
           officialCount: officialDocs.length,
           skippedCount,
           folderName,
-          doneMessage: `تم فحص ${queuedDocs.length} صورة: استخراج ${officialDocs.length} كتاب رسمي${
+          doneMessage: `اكتمل فحص ومراجعة ${queuedDocs.length} صورة: استخراج وتدقيق ${officialDocs.length} كتاب رسمي${
             skippedCount > 0 ? ` (واستبعاد ${skippedCount} صورة غير مطابقة)` : ''
-          } وتنزيل ملف Excel تلقائياً.`,
+          } وتنزيل ملف Excel بنجاح.`,
         });
       } else {
         setFolderScanState({
@@ -917,7 +980,7 @@ export default function App() {
         });
       }
     },
-    [enhanceContrast, precisionMode, runExtraction]
+    [enhanceContrast, precisionMode, runExtraction, scanRegion]
   );
 
   const handleTriggerFolderScan = useCallback(
@@ -1059,16 +1122,6 @@ export default function App() {
 
   const handleTriggerUpload = () => {
     fileInputRef.current?.click();
-  };
-
-  const handleLoadSample = async () => {
-    setIsGeneratingSample(true);
-    try {
-      const sampleFile = await generateSampleOfficialLetterFile();
-      await handleFilesSelected([sampleFile]);
-    } finally {
-      setIsGeneratingSample(false);
-    }
   };
 
   const handleRemoveDocument = (id: string) => {
@@ -1288,8 +1341,10 @@ export default function App() {
                       className="inline h-3.5 w-3.5 ml-1.5 text-emerald-700"
                       aria-hidden="true"
                     />
-                    {folderScanState.total > 0
-                      ? `جاري مسح «${folderScanState.folderName}»: صورة ${folderScanState.current} من ${folderScanState.total} (تم العثور على ${folderScanState.officialCount} كتاب رسمي)... وسيتم تنزيل Excel تلقائياً فور الانتهاء.`
+                    {folderScanState.phaseMessage
+                      ? folderScanState.phaseMessage
+                      : folderScanState.total > 0
+                      ? `جاري مسح «${folderScanState.folderName}»: صورة ${folderScanState.current} من ${folderScanState.total} (تم العثور على ${folderScanState.officialCount} كتاب رسمي)... وسيتم تنزيل Excel بعد إكمال جميع المراجعات.`
                       : `جاري البحث عن صور الكتب الرسمية داخل «${folderScanState.folderName}»...`}
                   </p>
                 ) : (
@@ -1343,8 +1398,6 @@ export default function App() {
                 onChangeSavedFolder={() => void handleTriggerFolderScan(true)}
                 savedFolderName={savedFolderName}
                 isFolderScanning={Boolean(folderScanState?.active)}
-                onLoadSample={handleLoadSample}
-                isGeneratingSample={isGeneratingSample}
               />
 
               <DocumentCanvas
@@ -1358,8 +1411,6 @@ export default function App() {
                 onExtractCroppedBox={handleExtractCroppedBox}
                 onDropFiles={handleFilesSelected}
                 onTriggerUpload={handleTriggerUpload}
-                onLoadSample={handleLoadSample}
-                isGeneratingSample={isGeneratingSample}
               />
 
               <ExtractionPanel
@@ -1399,12 +1450,6 @@ export default function App() {
             onTriggerUpload={handleTriggerUpload}
           />
         )}
-
-        {activeView === 'guide' && (
-          <AccuracyGuideView
-            onReturnToWorkspace={() => setActiveView('workspace')}
-          />
-        )}
       </main>
 
       <footer className="border-t border-slate-200 bg-white">
@@ -1424,13 +1469,6 @@ export default function App() {
               className="hover:text-slate-900 cursor-pointer"
             >
               سجل الكتب
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveView('guide')}
-              className="hover:text-slate-900 cursor-pointer"
-            >
-              إرشادات الدقة
             </button>
           </div>
         </div>

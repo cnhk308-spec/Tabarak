@@ -6,7 +6,6 @@ import {
   Loader2,
   Trash2,
   Upload,
-  FileText,
   FolderSearch,
 } from 'lucide-react';
 import { DocumentItem, PrecisionMode, ScanRegion } from '../types';
@@ -28,8 +27,6 @@ interface DocumentQueueSidebarProps {
   onChangeSavedFolder?: () => void;
   savedFolderName?: string | null;
   isFolderScanning?: boolean;
-  onLoadSample: () => void;
-  isGeneratingSample: boolean;
 }
 
 export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
@@ -48,8 +45,6 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
   onChangeSavedFolder,
   savedFolderName,
   isFolderScanning = false,
-  onLoadSample,
-  isGeneratingSample,
 }) => {
   return (
     <aside className="flex w-full lg:w-[290px] shrink-0 flex-col bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -114,17 +109,6 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
           >
             <button
               type="button"
-              onClick={() => onChangePrecisionMode('standard')}
-              className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                precisionMode === 'standard'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              سريع ودقيق
-            </button>
-            <button
-              type="button"
               onClick={() => onChangePrecisionMode('ultra')}
               className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 precisionMode === 'ultra'
@@ -132,7 +116,18 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              دقة فائقة
+              دقة فائقة (تلقائي)
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangePrecisionMode('standard')}
+              className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                precisionMode === 'standard'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              وضع سريع
             </button>
           </div>
         </div>
@@ -193,17 +188,6 @@ export const DocumentQueueSidebar: React.FC<DocumentQueueSidebarProps> = ({
           >
             <Upload className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span>إضافة صور كتب</span>
-          </button>
-          <button
-            type="button"
-            onClick={onLoadSample}
-            disabled={isGeneratingSample}
-            className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-blue-800 hover:text-blue-900 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>
-              {isGeneratingSample ? 'جاري تجهيز النموذج...' : 'تجربة بنموذج كتاب رسمي'}
-            </span>
           </button>
         </div>
       </div>

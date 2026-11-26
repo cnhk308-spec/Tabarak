@@ -550,7 +550,7 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
             className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>إعادة القراءة بوضع الدقة الفائقة</span>
+            <span>إعادة الفحص والتدقيق</span>
           </button>
         </div>
       )}
