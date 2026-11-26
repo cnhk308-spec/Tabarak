@@ -94,6 +94,24 @@ function isCharacterSubsequence(shorter: string, longer: string): boolean {
   return sIdx === shorter.length;
 }
 
+function isValidCalendarDate(value?: string): boolean {
+  if (!value) return false;
+  const western = convertToWesternDigits(value).trim();
+  const m = western.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  return (
+    year >= 1300 &&
+    year <= 2100 &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= 31
+  );
+}
+
 function reconcileZoomedHeaderResult(
   prev: ExtractionResult,
   zoomIssue: ExtractionResult | null,
@@ -124,11 +142,20 @@ function reconcileZoomedHeaderResult(
           issueNumberRaw: zoomedIssueRaw,
           issueNumberNormalized: zoomIssue.issueNumberNormalized,
           issueNumberConfidence: zoomIssue.issueNumberConfidence,
+          issueDigits:
+            zoomIssue.issueDigits && zoomIssue.issueDigits.length > 0
+              ? zoomIssue.issueDigits
+              : prev.issueDigits,
           alternativeIssueNumber: prevRaw || prev.alternativeIssueNumber || '',
         };
       }
-    } else if (zoomIssue.issueNumberConfidence === 'high') {
-      next.issueNumberConfidence = 'high';
+    } else {
+      if (zoomIssue.issueNumberConfidence === 'high') {
+        next.issueNumberConfidence = 'high';
+      }
+      if (zoomIssue.issueDigits && zoomIssue.issueDigits.length > 0) {
+        next.issueDigits = zoomIssue.issueDigits;
+      }
     }
   }
 
@@ -137,6 +164,8 @@ function reconcileZoomedHeaderResult(
   if (zoomDate && (zoomedDateRaw || zoomedDateNorm)) {
     const prevRaw = prev.dateRaw || '';
     const prevNorm = prev.dateNormalized || '';
+    const prevValid = isValidCalendarDate(prevNorm);
+    const zoomValid = isValidCalendarDate(zoomedDateNorm);
     const isDifferent =
       (zoomedDateNorm && zoomedDateNorm !== prevNorm) ||
       (zoomedDateRaw && zoomedDateRaw !== prevRaw);
@@ -151,11 +180,18 @@ function reconcileZoomedHeaderResult(
         zoomYear !== null &&
         zoomYear !== currCalYear;
 
+      // Never replace a valid 3-part date with a malformed date (e.g. 2026/002),
+      // and ALWAYS allow a valid 3-part date to fix a malformed date.
+      const rejectZoomForInvalidity = prevValid && !zoomValid;
+      const forceAcceptValidFix = !prevValid && zoomValid;
+
       if (
-        wouldDowngradeCurrentYear ||
-        (!options?.forceDateOverride &&
-          zoomDate.dateConfidence === 'low' &&
-          prev.dateConfidence === 'high')
+        !forceAcceptValidFix &&
+        (rejectZoomForInvalidity ||
+          wouldDowngradeCurrentYear ||
+          (!options?.forceDateOverride &&
+            zoomDate.dateConfidence === 'low' &&
+            prev.dateConfidence === 'high'))
       ) {
         next.alternativeDate = zoomedDateNorm || zoomedDateRaw;
       } else {
@@ -164,9 +200,14 @@ function reconcileZoomedHeaderResult(
           dateRaw: zoomedDateRaw || prevRaw,
           dateNormalized: zoomedDateNorm || prevNorm,
           dateConfidence:
-            zoomDate.dateConfidence === 'low' && options?.forceDateOverride
+            zoomDate.dateConfidence === 'low' &&
+            (options?.forceDateOverride || forceAcceptValidFix)
               ? 'medium'
               : zoomDate.dateConfidence,
+          dateDigits:
+            zoomDate.dateDigits && zoomDate.dateDigits.length > 0
+              ? zoomDate.dateDigits
+              : prev.dateDigits,
           calendarType:
             zoomDate.calendarType !== 'unknown'
               ? zoomDate.calendarType
@@ -174,8 +215,13 @@ function reconcileZoomedHeaderResult(
           alternativeDate: prevNorm || prevRaw || prev.alternativeDate || '',
         };
       }
-    } else if (zoomDate.dateConfidence === 'high') {
-      next.dateConfidence = 'high';
+    } else {
+      if (zoomDate.dateConfidence === 'high') {
+        next.dateConfidence = 'high';
+      }
+      if (zoomDate.dateDigits && zoomDate.dateDigits.length > 0) {
+        next.dateDigits = zoomDate.dateDigits;
+      }
     }
   }
 
@@ -243,6 +289,7 @@ export default function App() {
         applyContrast?: boolean;
         regionOverride?: ScanRegion;
         baseDoc?: DocumentItem;
+        forceSingleUltraPass?: boolean;
       }
     ): Promise<DocumentItem | null> => {
       const runToken = (activeRunTokensRef.current[docId] || 0) + 1;
@@ -256,6 +303,7 @@ export default function App() {
                 ...d,
                 status: 'processing',
                 isBodyLoading: false,
+                isHeaderVerifying: false,
                 precisionMode: mode,
                 errorMessage: undefined,
               }
@@ -264,6 +312,7 @@ export default function App() {
       );
 
       const startedAt = performance.now();
+      const useFastPass = !options?.forceSingleUltraPass;
       try {
         const effectiveRegion = options?.regionOverride ?? scanRegion;
         let payloadDataUrl = imageDataUrl;
@@ -273,41 +322,53 @@ export default function App() {
         let isCropped = Boolean(options?.isCroppedRegion);
         let originBox = options?.cropOriginBox;
         let headerBoxOrigin: BoundingBox | null = null;
+        let fullImagePromise:
+          | Promise<{ imageBase64: string; mimeType: string }>
+          | undefined;
 
         if (!isCropped && effectiveRegion === 'top-right') {
           payloadDataUrl = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-            minDim: 1500,
-            maxDim: 2200,
-            format: 'image/png',
+            minDim: useFastPass ? 1100 : 1500,
+            maxDim: useFastPass ? 1350 : 2100,
+            format: useFastPass ? 'image/jpeg' : 'image/png',
+            quality: 0.93,
             contrastFilter: false,
           });
-          resolvedMimeType = 'image/png';
+          resolvedMimeType = useFastPass ? 'image/jpeg' : 'image/png';
           isCropped = true;
           originBox = TOP_RIGHT_BOX;
         } else if (!isCropped && effectiveRegion === 'full') {
-          const [compressedFull, topRightPng] = await Promise.all([
-            compressImageDataUrl(imageDataUrl, 1550, 0.86),
-            cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-              minDim: 1500,
-              maxDim: 2200,
-              format: 'image/png',
-              contrastFilter: false,
-            }),
-          ]);
-          payloadDataUrl = compressedFull;
-          resolvedMimeType = 'image/jpeg';
-          headerImageBase64 = topRightPng;
-          headerMimeType = 'image/png';
+          // Prepare compact fast crop first (~25ms) so header extraction starts immediately (<2s target)
+          headerImageBase64 = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+            minDim: useFastPass ? 1100 : 1500,
+            maxDim: useFastPass ? 1350 : 2100,
+            format: useFastPass ? 'image/jpeg' : 'image/png',
+            quality: 0.93,
+            contrastFilter: false,
+          });
+          headerMimeType = useFastPass ? 'image/jpeg' : 'image/png';
           headerBoxOrigin = TOP_RIGHT_BOX;
+
+          fullImagePromise = compressImageDataUrl(imageDataUrl, 1450, 0.85).then(
+            async (compressed) => {
+              const finalFull = options?.applyContrast
+                ? await enhanceInkContrastDataUrl(compressed)
+                : compressed;
+              payloadDataUrl = finalFull;
+              resolvedMimeType = 'image/jpeg';
+              return { imageBase64: finalFull, mimeType: 'image/jpeg' };
+            }
+          );
         }
 
         if (options?.applyContrast) {
-          payloadDataUrl = await enhanceInkContrastDataUrl(payloadDataUrl);
           if (headerImageBase64) {
             headerImageBase64 = await enhanceInkContrastDataUrl(headerImageBase64);
             headerMimeType = 'image/jpeg';
+          } else {
+            payloadDataUrl = await enhanceInkContrastDataUrl(payloadDataUrl);
+            resolvedMimeType = 'image/jpeg';
           }
-          resolvedMimeType = 'image/jpeg';
         }
 
         const mapResultBoxes = (res: ExtractionResult): ExtractionResult => ({
@@ -350,29 +411,24 @@ export default function App() {
           const effectiveZoomMode: PrecisionMode = cfg.zoomPrecision ?? 'ultra';
           const baseHint = hintText ? `${hintText} — ` : '';
           const strokeHint =
-            'اقرأ كامل الجزء الأعلى الأيمن من الورقة بالكامل دون قص أو تحديد بمربعات ضيقة. تحقق مرتين من اليمين لليسار ثم من اليسار لليمين: لا تسقط الخانة الأخيرة القريبة من النقطتين (:) مثل ٦ في ٥٠٨٦->٥٠٨، ولا تسقط الصفر (٠) أو الرقم الوسطي، ولا تدمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، وميّز الرقم (٩) ذي الحلقة العلوية عن (٨ ∧)، وتأكد من (٦) في نهاية (٢٠٢٦) دون استبدالها بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).';
+            'اقرأ كامل الجزء الأعلى الأيمن من الورقة بالكامل وفسّر شكل كل رقم في digits وdateDigits. تحقق مرتين من اليمين لليسار ثم من اليسار لليمين: لا تسقط الخانة الأخيرة القريبة من (:) مثل ٦ في ٥٠٨٦->٥٠٨، ولا تدمج (٨٦) في (٣) مثل ٥٠٨٦->٥٠٣، وميّز (٩) ذات الحلقة العلوية عن (٨ ∧)، وتأكد من (٦) في نهاية (٢٠٢٦) دون استبدالها بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).';
 
           let verifyImg = payloadDataUrl;
           let verifyMime = resolvedMimeType;
 
           if (!isCropped && sourceHeader.boxReferenceImage !== 'full_image') {
-            if (headerImageBase64 && headerBoxOrigin === TOP_RIGHT_BOX) {
-              verifyImg = headerImageBase64;
-              verifyMime = headerMimeType || 'image/png';
+            const rawTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              minDim: 1500,
+              maxDim: 2100,
+              format: 'image/png',
+              contrastFilter: false,
+            });
+            if (options?.applyContrast) {
+              verifyImg = await enhanceInkContrastDataUrl(rawTopRight);
+              verifyMime = 'image/jpeg';
             } else {
-              const rawTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
-                minDim: 1500,
-                maxDim: 2200,
-                format: 'image/png',
-                contrastFilter: false,
-              });
-              if (options?.applyContrast) {
-                verifyImg = await enhanceInkContrastDataUrl(rawTopRight);
-                verifyMime = 'image/jpeg';
-              } else {
-                verifyImg = rawTopRight;
-                verifyMime = 'image/png';
-              }
+              verifyImg = rawTopRight;
+              verifyMime = 'image/png';
             }
           }
 
@@ -381,6 +437,7 @@ export default function App() {
               imageBase64: verifyImg,
               mimeType: verifyMime,
               precisionMode: effectiveZoomMode,
+              fastPass: false,
               hintText: `${baseHint}قراءة كاملة وعالية الدقة للجزء الأعلى الأيمن من الورقة تضم الترويسة والعدد والتاريخ معاً. ${strokeHint} اقرأ التاريخ مكانياً (يسار/وسط/يمين) بدون عكس اليوم والشهر.${cfg.extraDateHint ? ` ${cfg.extraDateHint}` : ''}`,
             },
             apiKey
@@ -445,6 +502,8 @@ export default function App() {
             headerImageBase64,
             headerMimeType,
             precisionMode: mode,
+            fastPass: useFastPass,
+            fullImagePromise,
             isCroppedRegion: isCropped,
             hintText,
           };
@@ -469,24 +528,8 @@ export default function App() {
               tracker.editedDate = nextDate;
               tracker.durationMs = headerDurationMs;
 
-              setDocuments((prev) =>
-                prev.map((d) => {
-                  if (d.id !== docId) return d;
-                  return {
-                    ...d,
-                    status: 'extracted',
-                    isBodyLoading: expectsBody,
-                    extractionDurationMs: headerDurationMs,
-                    result: headerMapped,
-                    editedIssueNumber: nextIssue,
-                    editedDate: nextDate,
-                    userVerified: false,
-                  };
-                })
-              );
-
-              const hasValidDateFormat = /^\d{4}\/\d{2}\/\d{2}$/.test(
-                headerMapped.dateNormalized || ''
+              const hasValidDateFormat = isValidCalendarDate(
+                headerMapped.dateNormalized
               );
               const isHandwritten = Boolean(headerMapped.isHandwrittenDetected);
               const detectedHeaderYear = extractYearNumber(
@@ -500,26 +543,61 @@ export default function App() {
 
               const needsZoomVerify =
                 (!isCropped || originBox === TOP_RIGHT_BOX) &&
-                (isHandwritten ||
+                ((mode === 'ultra' && useFastPass) ||
+                  isHandwritten ||
                   headerMapped.issueNumberConfidence !== 'high' ||
                   headerMapped.dateConfidence !== 'high' ||
                   !hasValidDateFormat ||
                   hasYearDeviation);
 
+              setDocuments((prev) =>
+                prev.map((d) => {
+                  if (d.id !== docId) return d;
+                  return {
+                    ...d,
+                    status: 'extracted',
+                    isBodyLoading: expectsBody,
+                    isHeaderVerifying: needsZoomVerify,
+                    extractionDurationMs: headerDurationMs,
+                    result: headerMapped,
+                    editedIssueNumber: nextIssue,
+                    editedDate: nextDate,
+                    userVerified: false,
+                  };
+                })
+              );
+
               if (needsZoomVerify) {
+                const invalidDateHint = !hasValidDateFormat
+                  ? `تنبيه حاسم: القراءة الأولية للتاريخ (${headerMapped.dateNormalized || headerMapped.dateRaw || 'ناقصة'}) غير صالحة أو ناقصة جزءاً! افحص سطر (التاريخ :) كاملاً من النقطتين (:) يساراً لاستخراج الأجزاء الثلاثة كاملة (اليوم 1-31 والشهر 1-12 والسنة 4 أرقام مثل ٢٠٢٦/٢/١١)، ولا تسقط اليوم (مثل ١١ أو 11) الملاصق لـ (التاريخ :) ولا تدمج (٢/١١) في (٠٠٢).`
+                  : undefined;
+
                 ultraZoomPromise = runZoomVerify(headerMapped, {
                   verifyIssue:
+                    (mode === 'ultra' && useFastPass) ||
                     isHandwritten ||
                     headerMapped.issueNumberConfidence !== 'high',
                   verifyDate:
+                    (mode === 'ultra' && useFastPass) ||
                     isHandwritten ||
                     headerMapped.dateConfidence !== 'high' ||
                     !hasValidDateFormat ||
                     hasYearDeviation,
                   zoomPrecision: 'ultra',
-                }).catch(() => {
-                  // Keep initial header reading if zoomed verification fails
-                });
+                  extraDateHint: invalidDateHint,
+                  forceDateOverride: !hasValidDateFormat,
+                })
+                  .catch(() => {
+                    // Keep initial header reading if zoomed verification fails
+                  })
+                  .finally(() => {
+                    if (isStale()) return;
+                    setDocuments((prev) =>
+                      prev.map((d) =>
+                        d.id === docId ? { ...d, isHeaderVerifying: false } : d
+                      )
+                    );
+                  });
               }
             },
           };
@@ -549,11 +627,65 @@ export default function App() {
         const fullResult = await executeProgressiveWithRecovery();
 
         if (isStale()) return null;
+        if (fullImagePromise) {
+          await fullImagePromise;
+        }
         const mappedFull = mapResultBoxes(fullResult);
         if (ultraZoomPromise) {
           await ultraZoomPromise;
         }
         if (isStale()) return null;
+
+        // If date is still malformed after Pass 2 (e.g. 2026/002 because faint ink next to التاريخ:),
+        // run one contrast-enhanced header check specifically targeting all 3 date components.
+        const postVerifySnap = tracker.headerResult ?? mappedFull;
+        if (!isValidCalendarDate(postVerifySnap.dateNormalized) && !isCropped) {
+          try {
+            const rawTopRight = await cropRegionDataUrl(imageDataUrl, TOP_RIGHT_BOX, 0, {
+              minDim: 1500,
+              maxDim: 2100,
+              format: 'image/png',
+              contrastFilter: false,
+            });
+            const boosted = await enhanceInkContrastDataUrl(rawTopRight);
+            const rescued = await extractHeaderOnlyWithGemini(
+              {
+                imageBase64: rawTopRight,
+                mimeType: 'image/png',
+                enhancedImageBase64: boosted,
+                enhancedMimeType: 'image/jpeg',
+                precisionMode: 'ultra',
+                fastPass: false,
+                hintText:
+                  'قراءة الترويسة الأولى للتاريخ غير مكتملة! افحص كامل المنطقة بجانب (التاريخ :) من النقطتين يساراً حتى آخر رقم، وأخرج ٣ أجزاء صحيحة (اليوم 1-31 والشهر 1-12 والسنة 4 أرقام مثل ٢٠٢٦/٢/١١) بدون دمج (٢/١١) في (٠٠٢).',
+              },
+              apiKey
+            );
+            if (!isStale() && isValidCalendarDate(rescued.dateNormalized)) {
+              const reconciled = reconcileZoomedHeaderResult(
+                postVerifySnap,
+                null,
+                rescued,
+                { forceDateOverride: true }
+              );
+              tracker.headerResult = reconciled;
+              tracker.editedDate = formatExtractedValue(
+                reconciled.dateRaw,
+                reconciled.dateNormalized,
+                digitPreference
+              );
+              setDocuments((prev) =>
+                prev.map((d) =>
+                  d.id === docId && d.result && !d.userVerified
+                    ? { ...d, result: reconciled, editedDate: tracker.editedDate }
+                    : d
+                )
+              );
+            }
+          } catch {
+            // Keep existing value if rescue retry fails
+          }
+        }
 
         // Post-body cross-check: catch misread handwritten years (e.g. 2024/2022/2028/2029 vs 2026)
         const currentHeaderSnap = tracker.headerResult ?? mappedFull;
@@ -724,6 +856,7 @@ export default function App() {
               ...d,
               status: 'extracted',
               isBodyLoading: false,
+              isHeaderVerifying: false,
               extractionDurationMs: d.extractionDurationMs ?? durationMs,
               result: mergedResult,
               editedIssueNumber: d.userVerified ? d.editedIssueNumber : finalIssue,
@@ -744,6 +877,7 @@ export default function App() {
           ...baseDoc,
           status: 'extracted',
           isBodyLoading: false,
+          isHeaderVerifying: false,
           extractionDurationMs: tracker.durationMs ?? durationMs,
           result: mergedSnapshot,
           editedIssueNumber: finalIssue,
@@ -763,6 +897,7 @@ export default function App() {
                   ...d,
                   status: 'error',
                   isBodyLoading: false,
+                  isHeaderVerifying: false,
                   errorMessage: err?.message || 'حدث خطأ أثناء تحليل الصورة.',
                 }
               : d
@@ -889,7 +1024,7 @@ export default function App() {
       const needsCompletionOrReview = (item: DocumentItem | null | undefined): boolean => {
         if (!item || item.status === 'error' || !item.result) return true;
         if (!isOfficialLetterResult(item.result)) return false;
-        const validDate = /^\d{4}\/\d{2}\/\d{2}$/.test(item.result.dateNormalized || '');
+        const validDate = isValidCalendarDate(item.result.dateNormalized);
         const needsIssueCheck =
           !item.editedIssueNumber.trim() || item.result.issueNumberConfidence !== 'high';
         const needsDateCheck =
@@ -942,7 +1077,10 @@ export default function App() {
         const liveDoc = documentsRef.current.find((d) => d.id === doc.id);
         const batchDoc = batchResults.get(doc.id);
         const finalDoc =
-          liveDoc && liveDoc.status !== 'processing' && !liveDoc.isBodyLoading
+          liveDoc &&
+          liveDoc.status !== 'processing' &&
+          !liveDoc.isBodyLoading &&
+          !liveDoc.isHeaderVerifying
             ? liveDoc
             : batchDoc;
 
@@ -1193,6 +1331,7 @@ export default function App() {
     if (!doc) return;
     void runExtraction(doc.id, doc.imageDataUrl, doc.mimeType, 'ultra', {
       applyContrast: enhanceContrast,
+      forceSingleUltraPass: true,
     });
   };
 

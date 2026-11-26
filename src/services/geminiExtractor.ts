@@ -1,5 +1,9 @@
 import { GoogleGenAI, MediaResolution, ThinkingLevel, Type } from '@google/genai';
-import { ExtractionResult, PrecisionMode } from '../types';
+import {
+  ExtractionResult,
+  HandwrittenDigitInterpretation,
+  PrecisionMode,
+} from '../types';
 
 export const GEMINI_API_KEY_STORAGE_KEY = 'mirsaad_gemini_api_key';
 
@@ -30,6 +34,8 @@ export interface ServerExtractParams {
   headerImageBase64?: string;
   headerMimeType?: string;
   precisionMode: PrecisionMode;
+  fastPass?: boolean;
+  fullImagePromise?: Promise<{ imageBase64: string; mimeType: string }>;
   isCroppedRegion: boolean;
   hintText?: string;
 }
@@ -44,6 +50,26 @@ export interface BodyExtractFields {
   latestBodyYear?: string;
 }
 
+const digitInterpretationItemSchema = {
+  type: Type.OBJECT,
+  properties: {
+    c: {
+      type: Type.STRING,
+      description: 'الرقم أو الحرف أو الشرطة المائلة الواحدة كما كُتبت في الورقة.',
+    },
+    w: {
+      type: Type.STRING,
+      description: 'المقابل القياسي باللاتينية (0-9) أو الرمز نفسه.',
+    },
+    k: {
+      type: Type.STRING,
+      description:
+        'تفسير مختصر واضح لكيفية كتابة هذا الرقم بخط اليد (مثال: حلقة مفرغة، نقطة حبر صغيرة، رأس مدبب مفتوح للأسفل ∧، معقوفة لليسار بساق نازلة ┐، حلقة علوية بساق نازلة، تعرج لليمين).',
+    },
+  },
+  required: ['c', 'w', 'k'],
+};
+
 const headerHandwritingSchema = {
   type: Type.OBJECT,
   properties: {
@@ -54,36 +80,22 @@ const headerHandwritingSchema = {
     issueObservation: {
       type: Type.STRING,
       description:
-        'مسح بصري كامل للسطر بجانب (العدد :) من علامة النقطتين (:) يساراً ثم من اليسار لليمين، مع التحقق من الخانة الملاصقة ليسار (:) مثل (٦) في (٥٠٨٦) وعدم إسقاطها لتصبح (٥٠٨) وعدم دمج (٨٦) في (٣).',
+        'مسح بصري موجز للسطر بجانب (العدد :) من (:) يساراً ثم من اليسار لليمين، مع تأكيد الخانة الملاصقة ليسار (:) مثل (٦) في (٥٠٨٦) وعدم إسقاطها.',
     },
     digits: {
       type: Type.ARRAY,
       description:
-        'تحليل كافة خانات حقل (العدد :) خانةً بخانة من اليسار لليمين (كل رقم أو حرف أو شرطة مائلة /). امسح المساحة الكاملة بجانب (العدد :) حتى النقطتين (:) ولا تسقط الخانة الأخيرة يميناً (مثل ٦ في ٥٠٨٦ -> ٥٠٨) ولا تسقط (٠) أو (٨) ولا تدمج (٨٦) في (٣).',
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          c: {
-            type: Type.STRING,
-            description: 'الرقم أو الحرف أو الشرطة المائلة الواحدة.',
-          },
-          k: {
-            type: Type.STRING,
-            description:
-              'وصف شكل الضربة بإيجاز (مثل: نقطة، حلقة، رأس مدبب ∧ لـ ٨، قوس لليسار ┐ لـ ٦، رأس لليمين، للأعلى، للأسفل، ذيل، تعرج، شرطة، حرف).',
-          },
-        },
-        required: ['c', 'k'],
-      },
+        'تحليل كافة خانات حقل (العدد :) خانةً بخانة من اليسار لليمين مع تفسير شكل كتابة كل رقم بخط اليد دون إسقاط أي خانة (يميناً أو وسطاً) أو دمج رقمين.',
+      items: digitInterpretationItemSchema,
     },
     beforeColon: {
       type: Type.STRING,
       description:
-        'أول رقم أو حرف مكتوب في أقصى اليمين بجانب (العدد :) مباشرة أو فوق طرف الخط المنقط الأيمن — افحص يمين العدد جيداً حتى لا تسقط الخانة الأخيرة مثل (٦) في (٥٠٨٦).',
+        'أول رقم أو حرف في أقصى اليمين بجانب (العدد :) مباشرة — افحص يمين العدد جيداً حتى لا تسقط الخانة الأخيرة مثل (٦) في (٥٠٨٦).',
     },
     issueNumberRaw: {
       type: Type.STRING,
-      description: 'العدد كاملاً بكل خاناته وحروفه وشرطاته كما كُتب بخط اليد بجانب (العدد :) دون قص أو دمج أو حذف أي خانة.',
+      description: 'العدد كاملاً بكل خاناته وحروفه وشرطاته كما كُتب بخط اليد بجانب (العدد :).',
     },
     issueNumberConfidence: {
       type: Type.STRING,
@@ -96,21 +108,27 @@ const headerHandwritingSchema = {
     dateObservation: {
       type: Type.STRING,
       description:
-        'ملاحظة بصرية دقيقة: صف الخانات الثلاث مكانياً (أقصى اليسار، الوسط، أقصى اليمين). تأكد لكل رقم في اليوم والشهر: هل رأسه دائرة/حلقة مغلقة أو شبه مغلقة بساق واحدة نازلة فهو (٩)، أم رأس مدبب مفتوح للأسفل (∧) بدون حلقة فهو (٨)، أم خطان منفصلان (١١)؟ وصف آخر رقم في السنة يميناً.',
+        'ملاحظة بصرية موجزة للخانات الثلاث الكاملة (أقصى اليسار، الوسط، أقصى اليمين قرب التاريخ :) مع التأكد من وجود 3 أجزاء صالحة (يوم 1-31، شهر 1-12، سنة 4 أرقام) وعدم إسقاط (١١) أو دمج (٢/١١) في (٠٠٢) وتمييز (٩ مقابل ٨، ٦ في ٢٠٢٦).',
+    },
+    dateDigits: {
+      type: Type.ARRAY,
+      description:
+        'تفسير كل رقم وشرطة مائلة في حقل (التاريخ :) خانةً بخانة بدءاً من يسار (التاريخ :) وحتى نهاية السنة (مثل ١، ١، /، ٢، /، ٢، ٠، ٢، ٦) مع وصف ضربة القلم لكل رقم وعدم دمج (١١) مع (٢) في (٠٠٢).',
+      items: digitInterpretationItemSchema,
     },
     dateLeftPart: {
       type: Type.STRING,
       description:
-        'الجزء الموجود في أقصى اليسار من التاريخ كما يظهر مكانياً في الصورة (غالباً السنة مثل ٢٠٢٦ أو قد يكون اليوم).',
+        'الجزء الموجود في أقصى اليسار من التاريخ كما يظهر مكانياً في الصورة (غالباً السنة مثل ٢٠٢٦ أو اليوم).',
     },
     dateMiddlePart: {
       type: Type.STRING,
-      description: 'الجزء الموجود في الوسط بين الفاصلين / (وهو الشهر دائماً).',
+      description: 'الجزء الموجود في الوسط بين الفاصلين / (الشهر دائماً 1-12، وليس 0 أو 002).',
     },
     dateRightPart: {
       type: Type.STRING,
       description:
-        'الجزء الموجود في أقصى اليمين الأقرب لكلمة (التاريخ :) كما يظهر مكانياً في الصورة (غالباً اليوم مثل ٢٧ أو ٩).',
+        'الجزء الموجود في أقصى اليمين الأقرب لكلمة (التاريخ :) مباشرة — افحص يمين التاريخ قرب النقطتين جيداً حتى لا تسقط اليوم مثل (١١) أو (11) أو (٩) أو (٢٧).',
     },
     dateDay: {
       type: Type.STRING,
@@ -153,6 +171,7 @@ const headerHandwritingSchema = {
     'issueNumberRaw',
     'issueNumberConfidence',
     'dateObservation',
+    'dateDigits',
     'dateLeftPart',
     'dateMiddlePart',
     'dateRightPart',
@@ -203,34 +222,33 @@ const documentBodySchema = {
   required: ['issuingEntity', 'title', 'recipient', 'subject', 'bodyContent'],
 };
 
-const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية العراقية والعربية:
-1. ركّز على كامل الجزء الأعلى الأيمن من الكتاب، واستخرج القيمة الكاملة المكتوبة بجانب كلمتَي (العدد :) و(التاريخ :) في الترويسة. تجاهل أرقام الهواتف وصندوق البريد وتواريخ الأختام والتواقيع أسفل الصفحة.
-2. عدم القص أو الدمج أو إسقاط أي خانة (يميناً أو وسطاً أو مكررة) إطلاقاً:
-   - امسح السطر بأكمله بدءاً من يسار النقطتين (:) وحتى نهاية الخط المنقط أو المساحة الفارغة يساراً، وافحص يمين العدد القريب من (:) جيداً فقد تكون الخانة الأخيرة خفيفة أو مائلة فوق الخط المنقط.
-   - في (٥٠٨٦) تأكد من كل الخانات الأربع: (٥) ثم نقطة (٠) ثم رأس مدبب (٨ ∧) ثم قوس معقوف لليسار بساق نازلة قرب النقطتين (٦ ┐)؛ فلا تسقط الرقم الأخير (٦) القريب من (:) لتقرأها (٥٠٨)، ولا تسقط (٨) لتقرأها (٥٠٦)، ولا تدمج (٨) و(٦) في (٣) لتقرأها (٥٠٣) — القراءة الصحيحة هي كل الخانات الأربع (٥٠٨٦)!
-   - إذا تكرر نفس الرقم مرتين متجاورتين فلا تدمجهما في رقم واحد! مثلاً (٦٤٨٨) فيها ثمانيتان متجاورتان (∧∧ = 4 سيقان مائلة)، وليست (٦٤٨).
-   - إذا احتوى العدد على أكثر من جزء بالخط اليدوي (مثل م/٤/١٢٨٥ أو ٦٤٨٨ أو ٥٠٨٦) فاقرأه كاملاً بكل خاناته.
-3. النماذج شبه المطبوعة: قد يكون جزء من التاريخ مطبوعاً والباقي بخط اليد (مثل /  / ٢٠٢ + ٦). ادمج المطبوع والمكتوب بالقلم.
-4. التمييز الدقيق للأرقام الهندية اليدوية (٠ إلى ٩):
-   - التمييز الحاسم بين (٩) و(٨):
-     * الرقم (٩) له رأس دائري أو حلقة مغلقة/شبه مغلقة في الأعلى مع ساق واحدة نازلة (مثل حرف «و» بدون ذيل أو الرقم 9)، حتى لو كُتب بسرعة وبقيت فتحة طفيفة أسفل الحلقة؛ لا تقرأه أبداً كـ (٨)!
-     * الرقم (٨) عبارة عن رأس مدبب واحد فقط مفتوح تماماً للأسفل بساقين متباعدتين (∧) دون أي حلقة أو انحناء علوي دائري. تأكد لكل خانة في اليوم والشهر (مثلاً ٩/٩ ليست ٨/٨ أو ٨/٩).
-   - (١١) عبارة عن خطين عموديين أو مائلين متوازيين منفصلين (|| أو //) لهما رأسان في الأعلى؛ لا تدمجهما أبداً في رقم (٨).
-   - (٠) نقطة حبر فقط دون ساق عمودية؛ لا تحوّل الرقم (٢) ذي الساق العمودية الطويلة إلى صفر (فمثلاً ٢٧ فيها ساق طويلة معقوفة لليمين قبل ٧، وليست ٠٧).
-   - (٥) حلقة أو قلب مغلق أجوف واضح الحجم؛ وقد تبدو برأس مسطح أو مائل بالحبر الخفيف.
-   - (٢) معقوفة الرأس لليمين (┌) ثم ساق عمودية؛ (٦) معقوفة الرأس لليسار (┐) ثم ساق عمودية نازلة.
-   - تمييز الرقم (٦) في نهاية السنة (٢٠٢٦) عن (٤) و(٨) و(٩):
-     * لا تستبدل السنة (٢٠٢٦) بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩)! الرقم (٦) له رأس أفقي أو قوس واحد متجه لليسار ثم ساق نازلة مباشرة (┐)، حتى لو انعكف طرفه قليلاً على السطر المنقط، بينما الرقم (٤) له تعرجات حادة لليمين.
-   - (٧) مفتوحة للأعلى (∨)؛ (٣) ثلاث أسنان علوية واضحة بساق واحدة؛ (٤) تعرّج واضح لليمين؛ (١) عمود مفرد، والفاصل (/) خط مائل أطول يمتد أعلى وأسفل الأرقام.
-5. للأرقام الغربية اليدوية (0-9): دقق بين 6 و8 و9 و0 و4 و3، ولا تقرأ 5086 كـ 503 أو 506، ولا 9 كـ 8، ولا 2026 كـ 2024 أبداً.
-6. قواعد قراءة التاريخ مكانياً (مهم جداً لمنع عكس اليوم والشهر!):
-   - في الكتب الرسمية العربية يُكتب التاريخ غالباً من اليمين لليسار بصيغة: [السنة يساراً] / [الشهر وسطاً] / [اليوم يميناً قرب النقطتين :].
-   - سجّل الخانات الثلاث بدقة مكانية كما تراها في الصورة داخل: dateLeftPart (أقصى اليسار)، وdateMiddlePart (الوسط)، وdateRightPart (أقصى اليمين قرب التاريخ :).
-   - لاحظ أن الرقم الأوسط (dateMiddlePart) هو الشهر دائماً، فإذا كانت السنة يساراً (مثل ٢٠٢٦ يساراً)، فإن dateRightPart هو اليوم وdateMiddlePart هو الشهر ولا يجوز عكسهما!
-7. قواعد العدد (issueNumberRaw):
-   - اقرأ كافة الأرقام والحروف والشرطات المائلة بجانب (العدد :) كاملة في issueObservation وdigits وbeforeColon بدون قص أو دمج أي خانة.`;
+const HANDWRITING_RULES = `قواعد صارمة لقراءة خط اليد وتفسير كل رقم في حقلَي (العدد :) و(التاريخ :) في الكتب الرسمية العراقية والعربية:
+1. ركّز على كامل الجزء الأعلى الأيمن من الكتاب بجانب (العدد :) و(التاريخ :). تجاهل أرقام الهواتف وتواريخ الأختام والتواقيع أسفل الصفحة.
+2. عدم القص أو الدمج أو إسقاط أي خانة (يميناً أو وسطاً أو مكررة):
+   - امسح السطر بأكمله بدءاً من يسار النقطتين (:) وحتى نهاية الخط المنقط يساراً، وافحص يمين العدد القريب من (:) جيداً فقد تكون الخانة الأخيرة خفيفة أو مائلة فوق الخط المنقط.
+   - في مثل (٥٠٨٦) تأكد من كل الخانات الأربع: (٥) حلقة، (٠) نقطة، (٨ ∧)، ثم (٦ ┐) ملاصقة ليسار (:) — لا تسقط (٦) لتقرأها (٥٠٨)، ولا (٨) لتقرأها (٥٠٦)، ولا تدمج (٨٦) في (٣) لتقرأها (٥٠٣).
+   - الرقم المكرر المتجاور (مثل ٦٤٨٨) فيها ثمانيتان (∧∧) وليست واحدة.
+3. النماذج شبه المطبوعة: ادمج المطبوع (مثل / / ٢٠٢) مع الرقم المكتوب بالقلم (٦).
+4. تشريح وتفسير كتابة الأرقام الهندية اليدوية (٠ إلى ٩):
+   - (٠): نقطة حبر دائرية/بيضوية صغيرة مصمتة دون ساق؛ لا تحوّل (٢) ذات الساق الطويلة إلى (٠).
+   - (١): خط عمودي مفرد (قد يميل قليلاً)؛ والخطان المتوازيان المنفصلان (١١) يعنيان 11 وليس (٨).
+   - (٢): عكفة/رأس متجه لليمين (┌) ثم ساق عمودية نازلة؛ قد يصغر الرأس بالكتابة السريعة لكنه يختلف عن (١) وعن (٦) المعقوفة لليسار.
+   - (٣): ثلاث أسنان علوية بساق واحدة نازلة (أو سنّتان مقوستان متصلتان) — لا تخلطها مع (٨٦).
+   - (٤): تعرّج حاد من قوسين متجهين لليمين (٤) من الأعلى للأسفل — لا تخلطها مع (٦).
+   - (٥): حلقة مغلقة أو قلب مفرغ واضح الحجم أكبر من نقطة الصفر (٠).
+   - (٦): قوس علوي متجه لليسار ثم ساق نازلة (┐) — خاصة قرب (:) أو في نهاية (٢٠٢٦) فلا تستبدل (٢٠٢٦) بـ (٢٠٢٤) أو (٢٠٢٨) أو (٢٠٢٩).
+   - (٧): زاوية/قوس مفتوح للأعلى (∨).
+   - (٨): رأس مدبب واحد مفتوح تماماً للأسفل بساقين متباعدتين (∧) دون أي حلقة علوية.
+   - (٩): رأس دائري/حلقة مغلقة أو شبه مغلقة في الأعلى بساق واحدة نازلة (مثل حرف و بلا ذيل) — حتى لو تركت الكتابة السريعة فتحة طفيفة أسفل الحلقة تبقى (٩) وليست (٨).
+5. للأرقام الغربية اليدوية (0-9): دقق بين 6 (حلقة سفلية) و9 (حلقة علوية) و8 (حلقتان) و0 و4 و3 و5 و2.
+6. تفسير كل رقم: سجّل في digits (للعدد) وdateDigits (للتاريخ) كل خانة مع مقابلها القياسي w وتفسير شكل كتابتها k بإيجاز ووضوح.
+7. قواعد التاريخ مكانياً واكتمال الخانات الثلاث (مهم جداً!):
+   - يتكون التاريخ الرسمي دائماً من ٣ أجزاء منفصلة بشرطتين مائلتين (/): [يوم 1-31] و[شهر 1-12] و[سنة من 4 أرقام مثل 2026].
+   - امسح السطر بالكامل بدءاً من يسار نقطتي (التاريخ :) حتى أقصى اليسار: لا تُسقط اليوم الملاصق لكلمة (التاريخ :) (مثل ١١ أو 11 أو ٩)، ولا تقرأ الشرطتين أو (١١) والخط المنقط كأصفار (٠٠)، ولا تدمج (٢ / ١١) أو (١١ / ٢) لتصبح (٠٠٢ / 002) أبداً! مثلاً: ٢٠٢٦/٢/١١ (أو ١١ / ٢ / ٢٠٢٦) هي ٣ أجزاء: السنة ٢٠٢٦، الشهر ٢، اليوم ١١.
+   - لا يجوز أبداً أن يكون الشهر أو اليوم 0 أو 00 أو 002.
+   - سجّل الخانات الثلاث مكانياً: dateLeftPart (أقصى اليسار، غالباً السنة) / dateMiddlePart (الوسط، الشهر دائماً) / dateRightPart (أقصى اليمين قرب التاريخ :، غالباً اليوم). لا تعكس اليوم والشهر أبداً.`;
 
-const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي في ترويسات الكتب الرسمية (حقل العدد وحقل التاريخ) بدقة بالغة دون تخمين.
+const HEADER_OCR_INSTRUCTION = `أنت خبير تدقيق بصري متخصص في قراءة خط اليد العربي والهندي والغربي وتفسير ضربات القلم لكل رقم في ترويسات الكتب الرسمية بدقة وسرعة.
 ${HANDWRITING_RULES}`;
 
 const BODY_OCR_INSTRUCTION = `استخرج الجهة المصدرة والعنوان أو (إلى /) و(م /) ومضمون الكتاب كاملاً بإيجاز ودقة، واقرأ أسفل الصفحة لاستخراج أي تاريخ مطبوع تحت التوقيع في signatureDateHint وأحدث سنة مذكورة في النص أو نسخة منه إلى في latestBodyYear.`;
@@ -304,6 +322,114 @@ function resolveIssueNumber(
   return cleanRaw;
 }
 
+function isValidDatePartNumber(numStr: string, maxVal: number): boolean {
+  if (!numStr || numStr.length > 2) return false;
+  const n = Number(numStr);
+  return Number.isInteger(n) && n >= 1 && n <= maxVal;
+}
+
+function isValidMonthDayOrder(first: string, second: string): [string, string] | null {
+  if (!isValidDatePartNumber(first, 31) || !isValidDatePartNumber(second, 31)) {
+    return null;
+  }
+  const fNum = Number(first);
+  const sNum = Number(second);
+  if (fNum > 12 && sNum > 12) return null;
+  if (fNum > 12 && sNum <= 12) return [String(sNum), String(fNum)];
+  return [String(fNum), String(sNum)];
+}
+
+function resolveSpatialTriple(
+  leftRaw: string,
+  midRaw: string,
+  rightRaw: string
+): { dateRaw: string; dateNormalized: string } | null {
+  const L = toWesternDigits(leftRaw).replace(/\D/g, '');
+  const M = toWesternDigits(midRaw).replace(/\D/g, '');
+  const R = toWesternDigits(rightRaw).replace(/\D/g, '');
+
+  if (!L || !M || !R) return null;
+
+  // Case A: 4-digit Year on LEFT (Arabic RTL or ISO YYYY/MM/DD)
+  if (L.length === 4) {
+    const md = isValidMonthDayOrder(M, R);
+    if (md) {
+      const [month, day] = md;
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${L}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
+      };
+    }
+  }
+
+  // Case B: 4-digit Year on RIGHT (Western LTR DD/MM/YYYY)
+  if (R.length === 4) {
+    const md = isValidMonthDayOrder(M, L);
+    if (md) {
+      const [month, day] = md;
+      return {
+        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+        dateNormalized: `${R}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
+      };
+    }
+  }
+
+  // Case C: 2-digit Year on LEFT (e.g. 26 / 2 / 11)
+  if (
+    L.length === 2 &&
+    Number(L) >= 20 &&
+    isValidDatePartNumber(M, 12) &&
+    isValidDatePartNumber(R, 31)
+  ) {
+    const fullY = Number(L) >= 40 ? `14${L}` : `20${L}`;
+    return {
+      dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+      dateNormalized: `${fullY}/${String(Number(M)).padStart(2, '0')}/${String(Number(R)).padStart(2, '0')}`,
+    };
+  }
+
+  // Case D: 2-digit Year on RIGHT (e.g. 11 / 2 / 26)
+  if (
+    R.length === 2 &&
+    Number(R) >= 20 &&
+    isValidDatePartNumber(L, 31) &&
+    isValidDatePartNumber(M, 12)
+  ) {
+    const fullY = Number(R) >= 40 ? `14${R}` : `20${R}`;
+    return {
+      dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
+      dateNormalized: `${fullY}/${String(Number(M)).padStart(2, '0')}/${String(Number(L)).padStart(2, '0')}`,
+    };
+  }
+
+  return null;
+}
+
+function extractTripleFromDateDigits(
+  rawDateDigits: unknown
+): { dateRaw: string; dateNormalized: string } | null {
+  if (!Array.isArray(rawDateDigits) || rawDateDigits.length === 0) return null;
+  const tokens: string[] = [];
+  let current = '';
+  for (const item of rawDateDigits) {
+    if (!item || typeof item !== 'object') continue;
+    const ch = String((item as { c?: unknown }).c ?? '').trim();
+    if (!ch) continue;
+    if (ch === '/' || ch === '-' || ch === '\\') {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  if (tokens.length !== 3) return null;
+
+  return resolveSpatialTriple(tokens[0], tokens[1], tokens[2]);
+}
+
 function resolveDateFromSpatialParts(headerResult: Record<string, any>): {
   dateRaw: string;
   dateNormalized: string;
@@ -317,67 +443,11 @@ function resolveDateFromSpatialParts(headerResult: Record<string, any>): {
   const midRaw = cleanEdge(headerResult.dateMiddlePart);
   const rightRaw = cleanEdge(headerResult.dateRightPart);
 
-  const L = toWesternDigits(leftRaw).replace(/\D/g, '');
-  const M = toWesternDigits(midRaw).replace(/\D/g, '');
-  const R = toWesternDigits(rightRaw).replace(/\D/g, '');
+  const fromSpatial = resolveSpatialTriple(leftRaw, midRaw, rightRaw);
+  if (fromSpatial) return fromSpatial;
 
-  const rawFromModel = cleanLabelNoise(headerResult.dateRaw || '', ['التاريخ', 'Date']);
-
-  if (L && M && R) {
-    // Case A: 4-digit Year on LEFT (both Arabic RTL DD/MM/YYYY and ISO YYYY/MM/DD)
-    if (L.length === 4 && Number(M) <= 31 && Number(R) <= 31) {
-      const mNum = Number(M);
-      const rNum = Number(R);
-      const [month, day] = mNum > 12 && rNum <= 12 ? [R, M] : [M, R];
-      return {
-        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
-        dateNormalized: `${L}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
-      };
-    }
-
-    // Case B: 4-digit Year on RIGHT (Western LTR DD/MM/YYYY)
-    if (R.length === 4 && Number(M) <= 31 && Number(L) <= 31) {
-      const mNum = Number(M);
-      const lNum = Number(L);
-      const [month, day] = mNum > 12 && lNum <= 12 ? [L, M] : [M, L];
-      return {
-        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
-        dateNormalized: `${R}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`,
-      };
-    }
-
-    // Case C: 2-digit Year on LEFT (e.g. 26 / 10 / 27)
-    if (
-      L.length === 2 &&
-      Number(L) >= 20 &&
-      Number(M) >= 1 &&
-      Number(M) <= 12 &&
-      Number(R) >= 1 &&
-      Number(R) <= 31
-    ) {
-      const fullY = Number(L) >= 40 ? `14${L}` : `20${L}`;
-      return {
-        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
-        dateNormalized: `${fullY}/${M.padStart(2, '0')}/${R.padStart(2, '0')}`,
-      };
-    }
-
-    // Case D: 2-digit Year on RIGHT (e.g. 27 / 10 / 26)
-    if (
-      R.length === 2 &&
-      Number(R) >= 20 &&
-      Number(L) >= 1 &&
-      Number(L) <= 31 &&
-      Number(M) >= 1 &&
-      Number(M) <= 12
-    ) {
-      const fullY = Number(R) >= 40 ? `14${R}` : `20${R}`;
-      return {
-        dateRaw: `${leftRaw}/${midRaw}/${rightRaw}`,
-        dateNormalized: `${fullY}/${M.padStart(2, '0')}/${L.padStart(2, '0')}`,
-      };
-    }
-  }
+  const fromDigits = extractTripleFromDateDigits(headerResult.dateDigits);
+  if (fromDigits) return fromDigits;
 
   const dateRaw = resolveDateRaw(headerResult);
   const dateNormalized = normalizeDateString(
@@ -400,16 +470,23 @@ function resolveDateRaw(headerResult: Record<string, any>): string {
       .split(/[\s\/\\\-.,،]+/)
       .map((p) => p.replace(/\D/g, ''))
       .filter(Boolean);
-    if (rawParts.length === 3) {
+    if (
+      rawParts.length === 3 &&
+      rawParts.every((p) => Number(p) >= 1 && (p.length <= 2 || p.length === 4))
+    ) {
       return raw;
     }
   }
 
   if (day && month && year) {
-    const dNum = Number(toWesternDigits(day).replace(/\D/g, ''));
-    const mNum = Number(toWesternDigits(month).replace(/\D/g, ''));
+    const dStr = toWesternDigits(day).replace(/\D/g, '');
+    const mStr = toWesternDigits(month).replace(/\D/g, '');
     const yStr = toWesternDigits(year).replace(/\D/g, '');
-    if (dNum >= 1 && dNum <= 31 && mNum >= 1 && mNum <= 12 && (yStr.length === 4 || yStr.length === 2)) {
+    if (
+      isValidDatePartNumber(dStr, 31) &&
+      isValidDatePartNumber(mStr, 12) &&
+      (yStr.length === 4 || yStr.length === 2)
+    ) {
       return `${day}/${month}/${year}`;
     }
   }
@@ -433,46 +510,49 @@ function normalizeDateString(
     const [a, b, c] = parts;
     const yearHint = toWesternDigits(dateYear || '').replace(/\D/g, '');
 
-    if (c.length === 4 && Number(a) <= 31 && Number(b) <= 31) {
-      if (Number(b) > 12 && Number(a) <= 12) {
-        return `${c}/${a.padStart(2, '0')}/${b.padStart(2, '0')}`;
+    if (c.length === 4) {
+      const md = isValidMonthDayOrder(b, a);
+      if (md) {
+        const [month, day] = md;
+        return `${c}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`;
       }
-      return `${c}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
     }
 
-    if (a.length === 4 && Number(b) <= 31 && Number(c) <= 31) {
-      if (Number(b) > 12 && Number(c) <= 12) {
-        return `${a}/${c.padStart(2, '0')}/${b.padStart(2, '0')}`;
+    if (a.length === 4) {
+      const md = isValidMonthDayOrder(b, c);
+      if (md) {
+        const [month, day] = md;
+        return `${a}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`;
       }
-      return `${a}/${b.padStart(2, '0')}/${c.padStart(2, '0')}`;
     }
 
-    if (c.length === 2 && Number(a) <= 31 && Number(b) <= 31) {
+    if (
+      c.length === 2 &&
+      isValidDatePartNumber(a, 31) &&
+      isValidDatePartNumber(b, 31)
+    ) {
       const resolvedYear =
         yearHint.length === 4 && yearHint.endsWith(c)
           ? yearHint
           : Number(c) >= 40
           ? `14${c}`
           : `20${c}`;
-      if (Number(b) > 12 && Number(a) <= 12) {
-        return `${resolvedYear}/${a.padStart(2, '0')}/${b.padStart(2, '0')}`;
+      const md = isValidMonthDayOrder(b, a);
+      if (md) {
+        const [month, day] = md;
+        return `${resolvedYear}/${month.padStart(2, '0')}/${day.padStart(2, '0')}`;
       }
-      return `${resolvedYear}/${b.padStart(2, '0')}/${a.padStart(2, '0')}`;
     }
   }
 
   const d = toWesternDigits(dateDay || '').replace(/\D/g, '');
   const m = toWesternDigits(dateMonth || '').replace(/\D/g, '');
   const y = toWesternDigits(dateYear || '').replace(/\D/g, '');
-  if (d && m && y) {
-    const dNum = Number(d);
-    const mNum = Number(m);
-    if (dNum >= 1 && dNum <= 31 && mNum >= 1 && mNum <= 12) {
-      const fullY =
-        y.length === 4 ? y : y.length === 2 ? (Number(y) >= 40 ? `14${y}` : `20${y}`) : y;
-      if (fullY.length === 4) {
-        return `${fullY}/${m.padStart(2, '0')}/${d.padStart(2, '0')}`;
-      }
+  if (isValidDatePartNumber(d, 31) && isValidDatePartNumber(m, 12) && y) {
+    const fullY =
+      y.length === 4 ? y : y.length === 2 ? (Number(y) >= 40 ? `14${y}` : `20${y}`) : y;
+    if (fullY.length === 4) {
+      return `${fullY}/${String(Number(m)).padStart(2, '0')}/${String(Number(d)).padStart(2, '0')}`;
     }
   }
 
@@ -574,7 +654,8 @@ async function runHeaderHandwritingOcrBrowser(
   precisionMode: PrecisionMode,
   hintLine: string,
   enhancedImageBase64?: string,
-  enhancedMimeType?: string
+  enhancedMimeType?: string,
+  fastPass?: boolean
 ) {
   const parts: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [
     {
@@ -597,7 +678,7 @@ async function runHeaderHandwritingOcrBrowser(
       enhancedImageBase64
         ? 'الصورة الأولى هي الجزء الأعلى الأيمن من الكتاب بدقته الأصلية، والصورة الثانية هي نفس المنطقة مع إبراز تباين الحبر. قارن الصورتين معاً و'
         : ''
-    }اقرأ حقل (العدد :) وحقل (التاريخ :) كاملاً من الجزء الأعلى الأيمن دون قص أو بتر أو دمج أي خانة. تحقق مرتين من اليمين إلى اليسار ثم من اليسار إلى اليمين أنك لم تسقط الخانة اليمنى القريبة من (العدد :) (مثل ٦ في ٥٠٨٦ -> ٥٠٨) ولم تدمج (٨٦) في (٣) (مثل ٥٠٨٦ -> ٥٠٣)، وميّز (٩) ذات الحلقة العلوية عن (٨ ∧)، واقرأ التاريخ مكانياً (يسار/وسط/يمين) دون إسقاط الصفر (٠).${hintLine}`,
+    }اقرأ حقل (العدد :) وحقل (التاريخ :) كاملاً من الجزء الأعلى الأيمن دون قص أو بتر أو دمج أي خانة، وفسّر شكل كتابة كل رقم في digits وdateDigits. تحقق مرتين من اليمين لليسار ثم من اليسار لليمين (لا تسقط ٦ قرب النقطتين مثل ٥٠٨٦->٥٠٨، ولا تدمج ٨٦ في ٣، وميّز ٩ ذات الحلقة عن ٨ ∧، وتأكد من ٦ في ٢٠٢٦).${hintLine}`,
   });
 
   const callModel = (
@@ -619,8 +700,11 @@ async function runHeaderHandwritingOcrBrowser(
       },
     });
 
-  const primaryLevel =
-    precisionMode === 'ultra' ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
+  const primaryLevel = fastPass
+    ? ThinkingLevel.LOW
+    : precisionMode === 'ultra'
+    ? ThinkingLevel.HIGH
+    : ThinkingLevel.LOW;
 
   const attemptPlan: Array<{
     model: string;
@@ -628,43 +712,60 @@ async function runHeaderHandwritingOcrBrowser(
     highRes: boolean;
     timeoutMs: number;
     delayBeforeMs: number;
-  }> = [
-    {
-      model: 'gemini-4-hydrogen',
-      level: primaryLevel,
-      highRes: true,
-      timeoutMs: precisionMode === 'ultra' ? 28000 : 22000,
-      delayBeforeMs: 0,
-    },
-    {
-      model: 'gemini-4-hydrogen',
-      level: ThinkingLevel.LOW,
-      highRes: true,
-      timeoutMs: 22000,
-      delayBeforeMs: 700,
-    },
-    {
-      model: 'gemini-3.1-flash-lite',
-      level: null,
-      highRes: true,
-      timeoutMs: 20000,
-      delayBeforeMs: 1200,
-    },
-    {
-      model: 'gemini-4-hydrogen',
-      level: ThinkingLevel.LOW,
-      highRes: false,
-      timeoutMs: 22000,
-      delayBeforeMs: 1800,
-    },
-    {
-      model: 'gemini-3.1-flash-lite',
-      level: null,
-      highRes: false,
-      timeoutMs: 22000,
-      delayBeforeMs: 2600,
-    },
-  ];
+  }> = fastPass
+    ? [
+        {
+          model: 'gemini-4-hydrogen',
+          level: ThinkingLevel.LOW,
+          highRes: true,
+          timeoutMs: 9000,
+          delayBeforeMs: 0,
+        },
+        {
+          model: 'gemini-3.1-flash-lite',
+          level: null,
+          highRes: true,
+          timeoutMs: 12000,
+          delayBeforeMs: 150,
+        },
+        {
+          model: 'gemini-4-hydrogen',
+          level: ThinkingLevel.LOW,
+          highRes: false,
+          timeoutMs: 15000,
+          delayBeforeMs: 500,
+        },
+      ]
+    : [
+        {
+          model: 'gemini-4-hydrogen',
+          level: primaryLevel,
+          highRes: true,
+          timeoutMs: precisionMode === 'ultra' ? 28000 : 14000,
+          delayBeforeMs: 0,
+        },
+        {
+          model: 'gemini-4-hydrogen',
+          level: ThinkingLevel.LOW,
+          highRes: true,
+          timeoutMs: 18000,
+          delayBeforeMs: 500,
+        },
+        {
+          model: 'gemini-3.1-flash-lite',
+          level: null,
+          highRes: true,
+          timeoutMs: 18000,
+          delayBeforeMs: 900,
+        },
+        {
+          model: 'gemini-4-hydrogen',
+          level: ThinkingLevel.LOW,
+          highRes: false,
+          timeoutMs: 20000,
+          delayBeforeMs: 1400,
+        },
+      ];
 
   let response;
   let lastError: unknown;
@@ -809,6 +910,23 @@ async function runBodyOcrBrowser(
   }
 }
 
+function mapDigitInterpretations(rawDigits: unknown): HandwrittenDigitInterpretation[] {
+  if (!Array.isArray(rawDigits)) return [];
+  const items: HandwrittenDigitInterpretation[] = [];
+  for (const entry of rawDigits) {
+    if (!entry || typeof entry !== 'object') continue;
+    const obj = entry as { c?: unknown; char?: unknown; w?: unknown; k?: unknown };
+    const char = String(obj.c ?? obj.char ?? '')
+      .replace(/^[:：]+|[:：]+$/g, '')
+      .trim();
+    if (!char || char.length > 6) continue;
+    const western = String(obj.w ?? '').trim() || toWesternDigits(char);
+    const explanation = String(obj.k ?? '').trim();
+    items.push({ char, western, explanation });
+  }
+  return items;
+}
+
 function buildHeaderExtractionResult(
   headerResult: Record<string, any>,
   boxReferenceImage: 'header_crop' | 'full_image'
@@ -819,6 +937,12 @@ function buildHeaderExtractionResult(
     headerResult.beforeColon
   );
   const { dateRaw, dateNormalized } = resolveDateFromSpatialParts(headerResult);
+  const issueDigits = mapDigitInterpretations(headerResult.digits);
+  const dateDigits = mapDigitInterpretations(headerResult.dateDigits);
+  const notes = [headerResult.issueObservation, headerResult.dateObservation]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' | ');
 
   return {
     issueNumberRaw: issueRaw,
@@ -826,11 +950,13 @@ function buildHeaderExtractionResult(
     issueNumberConfidence: headerResult.issueNumberConfidence || 'medium',
     alternativeIssueNumber: headerResult.alternativeIssueNumber || '',
     issueNumberBox: null,
+    issueDigits,
     dateRaw,
     dateNormalized,
     dateConfidence: headerResult.dateConfidence || 'medium',
     alternativeDate: headerResult.alternativeDate || '',
     dateBox: null,
+    dateDigits,
     boxReferenceImage,
     calendarType: resolveCalendarType(headerResult.calendarType, dateNormalized),
     issuingEntity: '',
@@ -838,6 +964,7 @@ function buildHeaderExtractionResult(
     recipient: '',
     subject: '',
     bodyContent: '',
+    handwritingNotes: notes || undefined,
     isHandwrittenDetected: Boolean(headerResult.isHandwrittenDetected),
   };
 }
@@ -881,37 +1008,61 @@ async function extractViaServer(
       headerImageBase64: params.imageBase64,
       headerMimeType: params.mimeType,
       precisionMode: params.precisionMode,
+      fastPass: params.fastPass,
       hintText: params.hintText,
     });
     callbacks?.onHeaderReady?.(headerOnly);
     return headerOnly;
   }
 
-  const headerPromise = postJson<ExtractionResult>('/api/extract-header', {
-    headerImageBase64: params.headerImageBase64,
-    headerMimeType: params.headerMimeType,
-    fullImageBase64: params.imageBase64,
-    fullMimeType: params.mimeType,
-    precisionMode: params.precisionMode,
-    hintText: params.hintText,
-  }).then((headerRes) => {
+  const resolveFullPayload = async () =>
+    params.fullImagePromise
+      ? await params.fullImagePromise
+      : { imageBase64: params.imageBase64, mimeType: params.mimeType };
+
+  // Start header OCR immediately without waiting for full-image compression or sending fullImageBase64 twice
+  const headerPromise = (async () => {
+    let headerRes = await postJson<ExtractionResult>('/api/extract-header', {
+      headerImageBase64: params.headerImageBase64,
+      headerMimeType: params.headerMimeType,
+      precisionMode: params.precisionMode,
+      fastPass: params.fastPass,
+      hintText: params.hintText,
+    });
+
+    if (!headerRes.issueNumberRaw?.trim() && !headerRes.dateRaw?.trim()) {
+      const fullPayload = await resolveFullPayload();
+      headerRes = await postJson<ExtractionResult>('/api/extract-header', {
+        headerImageBase64: fullPayload.imageBase64,
+        headerMimeType: fullPayload.mimeType,
+        precisionMode: params.precisionMode,
+        fastPass: params.fastPass,
+        hintText: params.hintText,
+      });
+      headerRes = { ...headerRes, boxReferenceImage: 'full_image' };
+    }
+
     callbacks?.onHeaderReady?.(headerRes);
     return headerRes;
-  });
+  })();
 
-  const bodyPromise = postJson<BodyExtractFields>('/api/extract-body', {
-    imageBase64: params.imageBase64,
-    mimeType: params.mimeType,
-    hintText: params.hintText,
-  }).catch(
-    (): BodyExtractFields => ({
-      issuingEntity: '',
-      title: '',
-      recipient: '',
-      subject: '',
-      bodyContent: '',
-    })
-  );
+  const bodyPromise = resolveFullPayload()
+    .then((fullPayload) =>
+      postJson<BodyExtractFields>('/api/extract-body', {
+        imageBase64: fullPayload.imageBase64,
+        mimeType: fullPayload.mimeType,
+        hintText: params.hintText,
+      })
+    )
+    .catch(
+      (): BodyExtractFields => ({
+        issuingEntity: '',
+        title: '',
+        recipient: '',
+        subject: '',
+        bodyContent: '',
+      })
+    );
 
   const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);
   return {
@@ -927,6 +1078,7 @@ export async function extractHeaderOnlyWithGemini(
     enhancedImageBase64?: string;
     enhancedMimeType?: string;
     precisionMode: PrecisionMode;
+    fastPass?: boolean;
     hintText?: string;
   },
   customApiKey?: string
@@ -939,6 +1091,7 @@ export async function extractHeaderOnlyWithGemini(
       enhancedImageBase64: params.enhancedImageBase64,
       enhancedMimeType: params.enhancedMimeType,
       precisionMode: params.precisionMode,
+      fastPass: params.fastPass,
       hintText: params.hintText,
     });
   }
@@ -958,7 +1111,8 @@ export async function extractHeaderOnlyWithGemini(
       params.enhancedImageBase64
         ? stripDataUrlPrefix(params.enhancedImageBase64)
         : undefined,
-      params.enhancedMimeType
+      params.enhancedMimeType,
+      params.fastPass
     );
     return buildHeaderExtractionResult(raw, 'header_crop');
   } catch (err: unknown) {
@@ -970,6 +1124,7 @@ export async function extractHeaderOnlyWithGemini(
         enhancedImageBase64: params.enhancedImageBase64,
         enhancedMimeType: params.enhancedMimeType,
         precisionMode: params.precisionMode,
+        fastPass: params.fastPass,
         hintText: params.hintText,
       });
     }
@@ -990,22 +1145,34 @@ export async function extractDocumentProgressive(
   }
 
   const ai = new GoogleGenAI({ apiKey: trimmedKey });
-  const cleanFullBase64 = stripDataUrlPrefix(params.imageBase64);
-  const fullMimeType = params.mimeType || 'image/jpeg';
   const hintLine =
     params.hintText && params.hintText.trim().length > 0
       ? ` تلميح: ${params.hintText.trim()}`
       : '';
   const hasSeparateHeader = Boolean(params.headerImageBase64);
 
+  const resolveFullPayload = async () => {
+    const payload = params.fullImagePromise
+      ? await params.fullImagePromise
+      : { imageBase64: params.imageBase64, mimeType: params.mimeType };
+    return {
+      cleanBase64: stripDataUrlPrefix(payload.imageBase64),
+      mimeType: payload.mimeType || 'image/jpeg',
+    };
+  };
+
   try {
     if (!hasSeparateHeader) {
+      const fullPayload = await resolveFullPayload();
       const rawHeader = await runHeaderHandwritingOcrBrowser(
         ai,
-        cleanFullBase64,
-        fullMimeType,
+        fullPayload.cleanBase64,
+        fullPayload.mimeType,
         params.precisionMode,
-        hintLine
+        hintLine,
+        undefined,
+        undefined,
+        params.fastPass
       );
       const headerOnly = buildHeaderExtractionResult(rawHeader, 'header_crop');
       callbacks?.onHeaderReady?.(headerOnly);
@@ -1021,7 +1188,10 @@ export async function extractDocumentProgressive(
         cleanHeaderBase64,
         headerMimeType,
         params.precisionMode,
-        hintLine
+        hintLine,
+        undefined,
+        undefined,
+        params.fastPass
       );
       let boxReferenceImage: 'header_crop' | 'full_image' = 'header_crop';
 
@@ -1029,12 +1199,16 @@ export async function extractDocumentProgressive(
         !rawHeader.headerFound ||
         (!rawHeader.issueNumberRaw?.trim() && !rawHeader.dateRaw?.trim())
       ) {
+        const fullPayload = await resolveFullPayload();
         rawHeader = await runHeaderHandwritingOcrBrowser(
           ai,
-          cleanFullBase64,
-          fullMimeType,
+          fullPayload.cleanBase64,
+          fullPayload.mimeType,
           params.precisionMode,
-          hintLine
+          hintLine,
+          undefined,
+          undefined,
+          params.fastPass
         );
         boxReferenceImage = 'full_image';
       }
@@ -1044,11 +1218,8 @@ export async function extractDocumentProgressive(
       return headerRes;
     })();
 
-    const bodyPromise = runBodyOcrBrowser(
-      ai,
-      cleanFullBase64,
-      fullMimeType,
-      hintLine
+    const bodyPromise = resolveFullPayload().then((fullPayload) =>
+      runBodyOcrBrowser(ai, fullPayload.cleanBase64, fullPayload.mimeType, hintLine)
     );
 
     const [headerRes, bodyRes] = await Promise.all([headerPromise, bodyPromise]);

@@ -33,7 +33,7 @@ export async function loadImageFile(file: File): Promise<{
   });
 
   const img = await loadHtmlImage(rawDataUrl);
-  const maxDim = 3400;
+  const maxDim = 2600;
   let targetWidth = img.naturalWidth;
   let targetHeight = img.naturalHeight;
 
@@ -53,7 +53,7 @@ export async function loadImageFile(file: File): Promise<{
       ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
       const outMime = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
       return {
-        dataUrl: canvas.toDataURL(outMime, 0.94),
+        dataUrl: canvas.toDataURL(outMime, 0.92),
         mimeType: outMime,
         width: targetWidth,
         height: targetHeight,

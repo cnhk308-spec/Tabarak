@@ -9,7 +9,12 @@ import {
   Loader2,
   ShieldCheck,
 } from 'lucide-react';
-import { ConfidenceLevel, DigitPreference, DocumentItem } from '../types';
+import {
+  ConfidenceLevel,
+  DigitPreference,
+  DocumentItem,
+  HandwrittenDigitInterpretation,
+} from '../types';
 import {
   TOP_RIGHT_BOX,
   convertToEasternDigits,
@@ -60,6 +65,60 @@ function renderConfidenceIndicator(level: ConfidenceLevel) {
       <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span>خط غير واضح</span>
     </span>
+  );
+}
+
+function renderDigitInterpretations(
+  title: string,
+  digits?: HandwrittenDigitInterpretation[]
+) {
+  if (!digits || digits.length === 0) return null;
+  const meaningful = digits.filter((d) => d.char && (d.explanation || d.western));
+  if (meaningful.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 space-y-2">
+      <div className="text-[11px] font-semibold text-slate-700">{title}</div>
+      <div dir="ltr" className="flex flex-wrap items-stretch gap-1.5">
+        {meaningful.map((item, idx) => {
+          const isSeparator = item.char === '/' || item.char === '-' || item.char === '\\';
+          if (isSeparator) {
+            return (
+              <div
+                key={`${item.char}-${idx}`}
+                className="flex items-center px-1 font-mono text-sm font-bold text-slate-400"
+              >
+                {item.char}
+              </div>
+            );
+          }
+          const showWestern = item.western && item.western !== item.char;
+          return (
+            <div
+              key={`${item.char}-${idx}`}
+              className="flex min-w-[66px] max-w-[130px] flex-1 flex-col items-center justify-between rounded-md border border-slate-200 bg-white px-2 py-1.5 text-center"
+            >
+              <div className="flex items-center gap-1 font-mono text-sm font-bold text-slate-900">
+                <span>{item.char}</span>
+                {showWestern && (
+                  <span className="text-[11px] font-semibold text-blue-900">
+                    ({item.western})
+                  </span>
+                )}
+              </div>
+              {item.explanation && (
+                <div
+                  dir="rtl"
+                  className="mt-0.5 text-[10px] leading-snug text-slate-600"
+                >
+                  {item.explanation}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -165,6 +224,15 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                 <span aria-hidden="true">·</span>
                 <span className="tabular-nums">
                   {(documentItem.extractionDurationMs / 1000).toFixed(2)} ثانية
+                </span>
+              </>
+            )}
+            {documentItem.isHeaderVerifying && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1 text-blue-900 font-medium">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  <span>تدقيق فائق...</span>
                 </span>
               </>
             )}
@@ -329,6 +397,11 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                       </button>
                     )}
                 </div>
+
+                {renderDigitInterpretations(
+                  'تفسير كل رقم في العدد (حسب كتابة اليد):',
+                  documentItem.result.issueDigits
+                )}
               </div>
 
               {/* Field 2: Date (التاريخ) */}
@@ -397,6 +470,11 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
                       </button>
                     )}
                 </div>
+
+                {renderDigitInterpretations(
+                  'تفسير أرقام التاريخ (حسب كتابة اليد):',
+                  documentItem.result.dateDigits
+                )}
               </div>
 
               {/* Title / Recipient / Subject / Body Section */}

@@ -15,12 +15,19 @@ export interface BoundingBox {
   xmax: number;
 }
 
+export interface HandwrittenDigitInterpretation {
+  char: string;
+  western: string;
+  explanation: string;
+}
+
 export interface ExtractionResult {
   issueNumberRaw: string;
   issueNumberNormalized: string;
   issueNumberConfidence: ConfidenceLevel;
   alternativeIssueNumber?: string;
   issueNumberBox?: BoundingBox | null;
+  issueDigits?: HandwrittenDigitInterpretation[];
 
   dateRaw: string;
   dateNormalized: string;
@@ -28,6 +35,7 @@ export interface ExtractionResult {
   alternativeDate?: string;
   calendarType: CalendarType;
   dateBox?: BoundingBox | null;
+  dateDigits?: HandwrittenDigitInterpretation[];
 
   issuingEntity?: string;
   title?: string;
@@ -57,6 +65,7 @@ export interface DocumentItem {
   precisionMode: PrecisionMode;
   extractionDurationMs?: number;
   isBodyLoading?: boolean;
+  isHeaderVerifying?: boolean;
   errorMessage?: string;
   result?: ExtractionResult;
   editedIssueNumber: string;

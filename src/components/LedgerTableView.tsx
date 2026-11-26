@@ -32,7 +32,13 @@ export const LedgerTableView: React.FC<LedgerTableViewProps> = ({
   const [filterStatus, setFilterStatus] = useState<'all' | 'verified' | 'review'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const hasPendingProcessing = useMemo(
-    () => documents.some((d) => d.status === 'processing' || Boolean(d.isBodyLoading)),
+    () =>
+      documents.some(
+        (d) =>
+          d.status === 'processing' ||
+          Boolean(d.isBodyLoading) ||
+          Boolean(d.isHeaderVerifying)
+      ),
     [documents]
   );
 
